@@ -95,6 +95,10 @@ class _CircuitNamed:
     def _updated(self, data: dict[str, Any]) -> None:
         label = data.get(f"ch_{self._circuit_no}_name")
         if label:
+            partner = data.get(f"ch_{self._circuit_no}_partner")
+            if partner:
+                # Primary leg carries the combined 240V load; the secondary reads 0.
+                label += " (240V L2)" if partner < self._circuit_no else " (240V)"
             new_name = f"{label} {self._circuit_suffix}"
             if self._attr_name != new_name:
                 self._attr_name = new_name
@@ -224,19 +228,41 @@ class SmartHomePanel3(DeltaPro3):
                     if 3 in sub:
                         result[f"ch_{n}_amp"] = round(sub[3][0][1], 2)
 
-                # Circuit labels (the user's app names). Metadata submessages rotate
-                # in over several frames; cache each into params as it appears so
-                # sensor titles can use the real name (fallback "Circuit N").
+                # Circuit metadata submessages (rotate in over several frames, so
+                # cache on the instance): sub-field 5 = the user's app label;
+                # sub-field 2 = split-phase link {1: linkMark, 2: partner circuit#}
+                # (present only on 240V circuits).
+                if not hasattr(self, "_meta"):
+                    self._meta: dict[int, dict[str, Any]] = {}
                 for n, fld in enumerate(NAME_FIELDS, 1):
                     entry = fields.get(fld)
                     if not entry or entry[0][0] != 2:
                         continue
-                    label = _parse_fields(entry[0][1]).get(5)
+                    meta = _parse_fields(entry[0][1])
+                    label = meta.get(5)
                     if label and label[0][0] == 2:
                         try:
-                            result[f"ch_{n}_name"] = label[0][1].decode("utf-8").strip().strip("\x00")
+                            self._meta.setdefault(n, {})["name"] = label[0][1].decode("utf-8").strip().strip("\x00")
                         except UnicodeDecodeError:
                             pass
+                    link = meta.get(2)
+                    if link and link[0][0] == 2:
+                        partner = _parse_fields(link[0][1]).get(2)
+                        if partner and partner[0][0] == 0:
+                            self._meta.setdefault(n, {})["partner"] = partner[0][1]
+                # Publish cached metadata into params every frame (for sensor naming).
+                for n, m in self._meta.items():
+                    if "name" in m:
+                        result[f"ch_{n}_name"] = m["name"]
+                    if "partner" in m:
+                        result[f"ch_{n}_partner"] = m["partner"]
+                # Combine each 240V pair onto the primary (lower-numbered) leg and zero
+                # the secondary, so the appliance reads once and energy isn't doubled.
+                for n, m in self._meta.items():
+                    p = m.get("partner")
+                    if p and n < p and f"ch_{n}_pwr" in result and f"ch_{p}_pwr" in result:
+                        result[f"ch_{n}_pwr"] = round(result[f"ch_{n}_pwr"] + result[f"ch_{p}_pwr"], 2)
+                        result[f"ch_{p}_pwr"] = 0.0
             except Exception as e:
                 _LOGGER.debug("SHP3 circuit/aggregate parse skipped: %s", e)
         return result
