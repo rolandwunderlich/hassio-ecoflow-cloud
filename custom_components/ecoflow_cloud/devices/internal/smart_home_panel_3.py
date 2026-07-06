@@ -77,6 +77,46 @@ def _parse_fields(b: bytes) -> dict[int, list[tuple[int, Any]]]:
     return out
 
 
+class _CircuitNamed:
+    """Mixin: relabel a per-circuit entity to the device-provided circuit name.
+
+    The SHP3 streams its circuit labels (`ch_N_name`) over the first ~minute, after
+    the entities are already built, so a static title can't use them. This overrides
+    `_updated` (called every coordinator refresh with the full params dict) to refresh
+    `_attr_name` from the label once known — names appear live, no restart needed.
+    Falls back to the original "Circuit N …" title until the label arrives.
+    """
+
+    def for_circuit(self, n: int, suffix: str) -> Any:
+        self._circuit_no = n
+        self._circuit_suffix = suffix
+        return self
+
+    def _updated(self, data: dict[str, Any]) -> None:
+        label = data.get(f"ch_{self._circuit_no}_name")
+        if label:
+            new_name = f"{label} {self._circuit_suffix}"
+            if self._attr_name != new_name:
+                self._attr_name = new_name
+                # Force a state write so idle circuits (no value change) still pick
+                # up the label as soon as it streams in, not only when W changes.
+                if getattr(self, "hass", None) is not None:
+                    self.schedule_update_ha_state()
+        super()._updated(data)  # type: ignore[misc]
+
+
+class NamedCircuitWatts(_CircuitNamed, WattsSensorEntity):
+    pass
+
+
+class NamedCircuitVolt(_CircuitNamed, VoltSensorEntity):
+    pass
+
+
+class NamedCircuitAmp(_CircuitNamed, AmpSensorEntity):
+    pass
+
+
 class SmartHomePanel3(DeltaPro3):
     """EcoFlow Smart Home Panel 3 (private / app API).
 
@@ -119,9 +159,15 @@ class SmartHomePanel3(DeltaPro3):
 
         for n in range(1, CIRCUITS + 1):
             label = cname(n)
-            out.append(WattsSensorEntity(client, self, f"ch_{n}_pwr", f"{label} Power").with_energy())
-            out.append(VoltSensorEntity(client, self, f"ch_{n}_vol", f"{label} Voltage", False))
-            out.append(AmpSensorEntity(client, self, f"ch_{n}_amp", f"{label} Current", False))
+            out.append(
+                NamedCircuitWatts(client, self, f"ch_{n}_pwr", f"{label} Power").for_circuit(n, "Power").with_energy()
+            )
+            out.append(
+                NamedCircuitVolt(client, self, f"ch_{n}_vol", f"{label} Voltage", False).for_circuit(n, "Voltage")
+            )
+            out.append(
+                NamedCircuitAmp(client, self, f"ch_{n}_amp", f"{label} Current", False).for_circuit(n, "Current")
+            )
         return out
 
     @override
