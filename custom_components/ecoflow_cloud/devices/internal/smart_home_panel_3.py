@@ -21,6 +21,12 @@ _LOGGER = logging.getLogger(__name__)
 
 # SHP3 has 32 monitored load circuits.
 CIRCUITS = 32
+# Per-circuit metadata submessages (sub-field 5 = the user's app circuit label,
+# sub-field 3 = breaker rating A). They live in two field blocks — 794..805 (12)
+# then 920..939 (20) — in the same circuit order as the 1015..1046 power array
+# (confirmed by power correlation: pos 14 "Kitchen Refrigerator" ~152 W, pos 29
+# "Server Rack, Basement Outlets" ~382 W). So circuit N (1-based) -> NAME_FIELDS[N-1].
+NAME_FIELDS = list(range(794, 806)) + list(range(920, 940))
 # DisplayPropertyUpload (cmdFunc 254 / cmdId 21) per-circuit array: fields
 # 1015..1046 are one submessage per circuit {1: volt, 2: watt(signed), 3: amp}.
 # These are absent from the DP3 proto (unknown fields dropped on ParseFromString),
@@ -101,11 +107,21 @@ class SmartHomePanel3(DeltaPro3):
         ]
         # 32 per-circuit sensors: power enabled (the M1b payoff) with a companion
         # integrated energy sensor (kWh) for the Energy dashboard's per-device
-        # breakdown; volt/amp disabled by default.
+        # breakdown; volt/amp disabled by default. Title uses the device-provided
+        # circuit label ("Kitchen Refrigerator") when known — cached in params from
+        # the metadata submessages, which arrive over the first few frames, so real
+        # names apply after the integration has seen a full cycle (else "Circuit N").
+        params = getattr(self, "data", None)
+        params = params.params if params is not None else {}
+
+        def cname(n: int) -> str:
+            return params.get(f"ch_{n}_name") or f"Circuit {n}"
+
         for n in range(1, CIRCUITS + 1):
-            out.append(WattsSensorEntity(client, self, f"ch_{n}_pwr", f"Circuit {n} Power").with_energy())
-            out.append(VoltSensorEntity(client, self, f"ch_{n}_vol", f"Circuit {n} Voltage", False))
-            out.append(AmpSensorEntity(client, self, f"ch_{n}_amp", f"Circuit {n} Current", False))
+            label = cname(n)
+            out.append(WattsSensorEntity(client, self, f"ch_{n}_pwr", f"{label} Power").with_energy())
+            out.append(VoltSensorEntity(client, self, f"ch_{n}_vol", f"{label} Voltage", False))
+            out.append(AmpSensorEntity(client, self, f"ch_{n}_amp", f"{label} Current", False))
         return out
 
     @override
@@ -161,6 +177,20 @@ class SmartHomePanel3(DeltaPro3):
                         result[f"ch_{n}_pwr"] = round(-sub[2][0][1], 2)
                     if 3 in sub:
                         result[f"ch_{n}_amp"] = round(sub[3][0][1], 2)
+
+                # Circuit labels (the user's app names). Metadata submessages rotate
+                # in over several frames; cache each into params as it appears so
+                # sensor titles can use the real name (fallback "Circuit N").
+                for n, fld in enumerate(NAME_FIELDS, 1):
+                    entry = fields.get(fld)
+                    if not entry or entry[0][0] != 2:
+                        continue
+                    label = _parse_fields(entry[0][1]).get(5)
+                    if label and label[0][0] == 2:
+                        try:
+                            result[f"ch_{n}_name"] = label[0][1].decode("utf-8").strip().strip("\x00")
+                        except UnicodeDecodeError:
+                            pass
             except Exception as e:
                 _LOGGER.debug("SHP3 circuit/aggregate parse skipped: %s", e)
         return result
