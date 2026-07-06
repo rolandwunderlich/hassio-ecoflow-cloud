@@ -12,12 +12,14 @@ from custom_components.ecoflow_cloud.devices.internal.proto import (
     ef_delta_pro_ultra_x_pb2 as dpux,
 )
 from custom_components.ecoflow_cloud.sensor import (
+    InRawWattsSolarSensorEntity,
     InWattsSensorEntity,
     LevelSensorEntity,
     OutWattsSensorEntity,
     QuotaStatusSensorEntity,
     RemainSensorEntity,
     TempSensorEntity,
+    WattsSensorEntity,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,6 +45,20 @@ class DeltaProUltraX(DeltaPro3):
             LevelSensorEntity(client, self, "cms_batt_soc", const.COMBINED_BATTERY_LEVEL),
             InWattsSensorEntity(client, self, "pow_in_sum_w", const.TOTAL_IN_POWER),
             OutWattsSensorEntity(client, self, "pow_out_sum_w", const.TOTAL_OUT_POWER),
+            # AC / grid / solar power flows (DP3 DisplayPropertyUpload; inherited
+            # decode). Read ~0 in an idle capture — proto3 omits zero scalars — so
+            # they populate once the unit is charging/discharging.
+            InWattsSensorEntity(client, self, "pow_get_ac_in", const.AC_IN_POWER),
+            OutWattsSensorEntity(client, self, "pow_get_ac", const.AC_OUT_POWER),
+            OutWattsSensorEntity(client, self, "pow_get_ac_hv_out", "AC HV Output Power"),
+            OutWattsSensorEntity(client, self, "pow_get_ac_lv_out", "AC LV Output Power"),
+            InRawWattsSolarSensorEntity(client, self, "pow_get_pv_h", "Solar High Voltage Input Power"),
+            InRawWattsSolarSensorEntity(client, self, "pow_get_pv_l", "Solar Low Voltage Input Power"),
+            # Per-phase output power (RuntimePropertyUpload fields 353/354). Signed /
+            # bidirectional -> plain WattsSensorEntity to preserve sign. Anchored
+            # against live capture: L1 -12.37 W, L2 -12.61 W (idle split-phase draw).
+            WattsSensorEntity(client, self, "pow_get_l1", "AC Output Power L1"),
+            WattsSensorEntity(client, self, "pow_get_l2", "AC Output Power L2"),
             RemainSensorEntity(client, self, "cms_chg_rem_time", const.CHARGE_REMAINING_TIME),
             RemainSensorEntity(client, self, "cms_dsg_rem_time", const.DISCHARGE_REMAINING_TIME),
             LevelSensorEntity(client, self, "cms_max_chg_soc", const.MAX_CHARGE_LEVEL),
