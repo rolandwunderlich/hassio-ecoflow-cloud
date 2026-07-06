@@ -41,36 +41,42 @@ class DeltaProUltraX(DeltaPro3):
 
     @override
     def sensors(self, client: EcoflowApiClient) -> list[Any]:
+        # Enabled-by-default = the at-a-glance headline set (aggregate SoC, total
+        # power in/out, remaining times, status) + per-pack SoC. Everything else
+        # (AC/solar breakdowns, per-phase, config-mirror limits, per-pack temp) is
+        # registered but disabled by default — available for anyone who wants it
+        # without cluttering the device page. `False` = disabled by default.
         return [
+            # --- Headline (enabled) ---
             LevelSensorEntity(client, self, "cms_batt_soc", const.COMBINED_BATTERY_LEVEL),
             InWattsSensorEntity(client, self, "pow_in_sum_w", const.TOTAL_IN_POWER),
             OutWattsSensorEntity(client, self, "pow_out_sum_w", const.TOTAL_OUT_POWER),
-            # AC / grid / solar power flows (DP3 DisplayPropertyUpload; inherited
-            # decode). Read ~0 in an idle capture — proto3 omits zero scalars — so
-            # they populate once the unit is charging/discharging.
-            InWattsSensorEntity(client, self, "pow_get_ac_in", const.AC_IN_POWER),
-            OutWattsSensorEntity(client, self, "pow_get_ac", const.AC_OUT_POWER),
-            OutWattsSensorEntity(client, self, "pow_get_ac_hv_out", "AC HV Output Power"),
-            OutWattsSensorEntity(client, self, "pow_get_ac_lv_out", "AC LV Output Power"),
-            InRawWattsSolarSensorEntity(client, self, "pow_get_pv_h", "Solar High Voltage Input Power"),
-            InRawWattsSolarSensorEntity(client, self, "pow_get_pv_l", "Solar Low Voltage Input Power"),
-            # Per-phase output power (RuntimePropertyUpload fields 353/354). Signed /
-            # bidirectional -> plain WattsSensorEntity to preserve sign. Anchored
-            # against live capture: L1 -12.37 W, L2 -12.61 W (idle split-phase draw).
-            WattsSensorEntity(client, self, "pow_get_l1", "AC Output Power L1"),
-            WattsSensorEntity(client, self, "pow_get_l2", "AC Output Power L2"),
             RemainSensorEntity(client, self, "cms_chg_rem_time", const.CHARGE_REMAINING_TIME),
             RemainSensorEntity(client, self, "cms_dsg_rem_time", const.DISCHARGE_REMAINING_TIME),
-            LevelSensorEntity(client, self, "cms_max_chg_soc", const.MAX_CHARGE_LEVEL),
-            LevelSensorEntity(client, self, "cms_min_dsg_soc", const.MIN_DISCHARGE_LEVEL),
             QuotaStatusSensorEntity(client, self),
-            # Per-pack SoC (field 786) for all 10 bays. Enabled so populated bays
+            # Per-pack SoC (field 786), all 10 bays. Enabled so populated bays
             # record history immediately; unpopulated bays stay unavailable.
             *[
                 LevelSensorEntity(client, self, f"bp_{n}_soc", const.BATTERY_N_LEVEL % n)
                 for n in range(1, MAX_PACKS + 1)
             ],
-            # Per-pack temperature — secondary, disabled by default (opt-in).
+            # --- Detail (disabled by default, available) ---
+            # AC / solar power flows. Read ~0 in an idle capture (proto3 omits zero
+            # scalars); populate under load.
+            InWattsSensorEntity(client, self, "pow_get_ac_in", const.AC_IN_POWER, False),
+            OutWattsSensorEntity(client, self, "pow_get_ac", const.AC_OUT_POWER, False),
+            OutWattsSensorEntity(client, self, "pow_get_ac_hv_out", "AC HV Output Power", False),
+            OutWattsSensorEntity(client, self, "pow_get_ac_lv_out", "AC LV Output Power", False),
+            InRawWattsSolarSensorEntity(client, self, "pow_get_pv_h", "Solar High Voltage Input Power", False),
+            InRawWattsSolarSensorEntity(client, self, "pow_get_pv_l", "Solar Low Voltage Input Power", False),
+            # Per-phase output power (fields 353/354). Signed -> plain WattsSensorEntity
+            # to preserve direction. Anchored live: L1 -12.37 W, L2 -12.61 W idle.
+            WattsSensorEntity(client, self, "pow_get_l1", "AC Output Power L1", False),
+            WattsSensorEntity(client, self, "pow_get_l2", "AC Output Power L2", False),
+            # SoC limits — config mirrors, not telemetry.
+            LevelSensorEntity(client, self, "cms_max_chg_soc", const.MAX_CHARGE_LEVEL, False),
+            LevelSensorEntity(client, self, "cms_min_dsg_soc", const.MIN_DISCHARGE_LEVEL, False),
+            # Per-pack temperature, all 10 bays.
             *[
                 TempSensorEntity(client, self, f"bp_{n}_temp", const.BATTERY_N_TEMP % n, False)
                 for n in range(1, MAX_PACKS + 1)
