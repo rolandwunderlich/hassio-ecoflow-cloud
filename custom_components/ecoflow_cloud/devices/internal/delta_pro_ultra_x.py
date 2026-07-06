@@ -42,8 +42,8 @@ class DeltaProUltraX(DeltaPro3):
     @override
     def sensors(self, client: EcoflowApiClient) -> list[Any]:
         # Enabled-by-default = the at-a-glance headline set (aggregate SoC, total
-        # power in/out, remaining times, status) + per-pack SoC. Everything else
-        # (AC/solar breakdowns, per-phase, config-mirror limits, per-pack temp) is
+        # power in/out, remaining times, status). Everything else (AC/solar
+        # breakdowns, per-phase, config-mirror limits, per-pack SoC/temp) is
         # registered but disabled by default — available for anyone who wants it
         # without cluttering the device page. `False` = disabled by default.
         return [
@@ -54,13 +54,13 @@ class DeltaProUltraX(DeltaPro3):
             RemainSensorEntity(client, self, "cms_chg_rem_time", const.CHARGE_REMAINING_TIME),
             RemainSensorEntity(client, self, "cms_dsg_rem_time", const.DISCHARGE_REMAINING_TIME),
             QuotaStatusSensorEntity(client, self),
-            # Per-pack SoC (field 786), all 10 bays. Enabled so populated bays
-            # record history immediately; unpopulated bays stay unavailable.
+            # --- Detail (disabled by default, available) ---
+            # Per-pack SoC (field 786), all 10 bays. Disabled by default; enable a
+            # bay to record it (unpopulated bays stay unavailable).
             *[
-                LevelSensorEntity(client, self, f"bp_{n}_soc", const.BATTERY_N_LEVEL % n)
+                LevelSensorEntity(client, self, f"bp_{n}_soc", const.BATTERY_N_LEVEL % n, False)
                 for n in range(1, MAX_PACKS + 1)
             ],
-            # --- Detail (disabled by default, available) ---
             # AC / solar power flows. Read ~0 in an idle capture (proto3 omits zero
             # scalars); populate under load.
             InWattsSensorEntity(client, self, "pow_get_ac_in", const.AC_IN_POWER, False),
