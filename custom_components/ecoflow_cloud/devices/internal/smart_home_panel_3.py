@@ -151,7 +151,11 @@ class SmartHomePanel3(DeltaPro3):
                     if 1 in sub:
                         result[f"ch_{n}_vol"] = round(sub[1][0][1], 2)
                     if 2 in sub:
-                        result[f"ch_{n}_pwr"] = round(sub[2][0][1], 2)
+                        # EcoFlow signs load consumption negative (power flowing out
+                        # of the panel bus to the branch load). Negate so consumption
+                        # reads positive — matches system_power and the HA Energy
+                        # dashboard's "individual device" consumption convention.
+                        result[f"ch_{n}_pwr"] = round(-sub[2][0][1], 2)
                     if 3 in sub:
                         result[f"ch_{n}_amp"] = round(sub[3][0][1], 2)
             except Exception as e:
