@@ -49,8 +49,12 @@ class DeltaProUltraX(DeltaPro3):
         return [
             # --- Headline (enabled) ---
             LevelSensorEntity(client, self, "cms_batt_soc", const.COMBINED_BATTERY_LEVEL),
-            InWattsSensorEntity(client, self, "pow_in_sum_w", const.TOTAL_IN_POWER),
-            OutWattsSensorEntity(client, self, "pow_out_sum_w", const.TOTAL_OUT_POWER),
+            # Total in/out power, each with a companion integrated energy sensor
+            # (kWh, total_increasing) = battery charge / discharge energy for the HA
+            # Energy dashboard's storage slot. (Native accu_chg/dsg_energy don't
+            # populate for the DPU X's external-pack topology, so integrate here.)
+            InWattsSensorEntity(client, self, "pow_in_sum_w", const.TOTAL_IN_POWER).with_energy(),
+            OutWattsSensorEntity(client, self, "pow_out_sum_w", const.TOTAL_OUT_POWER).with_energy(),
             RemainSensorEntity(client, self, "cms_chg_rem_time", const.CHARGE_REMAINING_TIME),
             RemainSensorEntity(client, self, "cms_dsg_rem_time", const.DISCHARGE_REMAINING_TIME),
             QuotaStatusSensorEntity(client, self),

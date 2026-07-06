@@ -87,8 +87,9 @@ class SmartHomePanel3(DeltaPro3):
         out: list[Any] = [
             # Battery SoC — DP3 field 262 (cms_batt_soc), decodes via the parent.
             LevelSensorEntity(client, self, "cms_batt_soc", const.COMBINED_BATTERY_LEVEL),
-            # Total system real power (aggregate). Enabled headline.
-            WattsSensorEntity(client, self, "shp_sys_pwr", "System Power"),
+            # Total system real power (aggregate) + integrated energy (kWh,
+            # total_increasing) for the HA Energy dashboard. Enabled headline.
+            WattsSensorEntity(client, self, "shp_sys_pwr", "System Power").with_energy(),
             QuotaStatusSensorEntity(client, self),
             # Per-phase power + line voltage + net flow — disabled until home/grid/
             # battery attribution is confirmed against the app/portal.
@@ -98,9 +99,11 @@ class SmartHomePanel3(DeltaPro3):
             VoltSensorEntity(client, self, "shp_l2_vol", "L2 Voltage", False),
             WattsSensorEntity(client, self, "shp_net_flow_pwr", "Net Grid/Battery Power (unverified)", False),
         ]
-        # 32 per-circuit sensors: power enabled (the M1b payoff), volt/amp disabled.
+        # 32 per-circuit sensors: power enabled (the M1b payoff) with a companion
+        # integrated energy sensor (kWh) for the Energy dashboard's per-device
+        # breakdown; volt/amp disabled by default.
         for n in range(1, CIRCUITS + 1):
-            out.append(WattsSensorEntity(client, self, f"ch_{n}_pwr", f"Circuit {n} Power"))
+            out.append(WattsSensorEntity(client, self, f"ch_{n}_pwr", f"Circuit {n} Power").with_energy())
             out.append(VoltSensorEntity(client, self, f"ch_{n}_vol", f"Circuit {n} Voltage", False))
             out.append(AmpSensorEntity(client, self, f"ch_{n}_amp", f"Circuit {n} Current", False))
         return out
