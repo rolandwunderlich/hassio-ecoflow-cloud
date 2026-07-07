@@ -32,13 +32,19 @@ NAME_FIELDS = list(range(794, 806)) + list(range(920, 940))
 # These are absent from the DP3 proto (unknown fields dropped on ParseFromString),
 # so they are recovered with a second raw pass below.
 CIRCUIT_FIELD_BASE = 1015
-# Aggregate float fields (wiretype-5) confirmed in the same frame; home/grid/battery
-# attribution is structural (magnitude + L1+L2==total) and pending an app/portal
-# cross-check, so those flow sensors are disabled-by-default until labeled.
-F_SYS_PWR = 515  # total real power (~L1+L2)
-F_L1_PWR, F_L2_PWR = 962, 963
+# Aggregate float fields (wiretype-5), labeled by comparing grid-mode capture
+# (f515 == f516 exactly, battery idle) against islanded/battery-discharge capture
+# (f515 == 0 while f516 tracks the 32-circuit sum). f964..967 satisfy the power
+# triangle VA^2 == W^2 + VAR^2 within ~0.5% on loaded frames. f1227 is a signed
+# duplicate of home load (negative = consuming), not a distinct battery flow;
+# battery contribution is computed as load - grid instead.
+F_GRID_PWR = 515  # grid real power total (0 when islanded)
+F_LOAD_PWR = 516  # home load real power total (~= sum of the 32 circuits)
+F_GRID_L1_PWR, F_GRID_L2_PWR = 962, 963
 F_L1_VOL, F_L2_VOL = 956, 957
-F_NET_FLOW = 1227  # signed aggregate flow (grid or battery)
+F_GRID_L1_AMP, F_GRID_L2_AMP = 958, 959
+# f964/965 = grid L1/L2 reactive power (VAR, signed); f966/967 = apparent (VA);
+# f1227 = -load — decoded but not exposed as sensors.
 
 
 def _read_varint(b: bytes, i: int) -> tuple[int, int]:
@@ -137,17 +143,20 @@ class SmartHomePanel3(DeltaPro3):
         out: list[Any] = [
             # Battery SoC — DP3 field 262 (cms_batt_soc), decodes via the parent.
             LevelSensorEntity(client, self, "cms_batt_soc", const.COMBINED_BATTERY_LEVEL),
-            # Total system real power (aggregate) + integrated energy (kWh,
-            # total_increasing) for the HA Energy dashboard. Enabled headline.
-            WattsSensorEntity(client, self, "shp_sys_pwr", "System Power").with_energy(),
+            # The three headline flows, each with integrated energy (kWh,
+            # total_increasing) for the HA Energy dashboard: home load, grid
+            # import, and the battery's contribution (computed load - grid).
+            WattsSensorEntity(client, self, "shp_load_pwr", "Home Load Power").with_energy(),
+            WattsSensorEntity(client, self, "shp_grid_pwr", "Grid Power").with_energy(),
+            WattsSensorEntity(client, self, "shp_batt_pwr", "Battery Output Power"),
             QuotaStatusSensorEntity(client, self),
-            # Per-phase power + line voltage + net flow — disabled until home/grid/
-            # battery attribution is confirmed against the app/portal.
-            WattsSensorEntity(client, self, "shp_l1_pwr", "L1 Power", False),
-            WattsSensorEntity(client, self, "shp_l2_pwr", "L2 Power", False),
+            # Grid-side per-leg detail + line voltage — disabled by default.
+            WattsSensorEntity(client, self, "shp_grid_l1_pwr", "Grid L1 Power", False),
+            WattsSensorEntity(client, self, "shp_grid_l2_pwr", "Grid L2 Power", False),
             VoltSensorEntity(client, self, "shp_l1_vol", "L1 Voltage", False),
             VoltSensorEntity(client, self, "shp_l2_vol", "L2 Voltage", False),
-            WattsSensorEntity(client, self, "shp_net_flow_pwr", "Net Grid/Battery Power (unverified)", False),
+            AmpSensorEntity(client, self, "shp_grid_l1_amp", "Grid L1 Current", False),
+            AmpSensorEntity(client, self, "shp_grid_l2_amp", "Grid L2 Current", False),
         ]
         # 32 per-circuit sensors: power enabled (the M1b payoff) with a companion
         # integrated energy sensor (kWh) for the Energy dashboard's per-device
@@ -199,16 +208,33 @@ class SmartHomePanel3(DeltaPro3):
                     return vals[0][1] if vals and vals[0][0] == 5 else None
 
                 for name, no in (
-                    ("shp_sys_pwr", F_SYS_PWR),
-                    ("shp_l1_pwr", F_L1_PWR),
-                    ("shp_l2_pwr", F_L2_PWR),
+                    ("shp_grid_pwr", F_GRID_PWR),
+                    ("shp_load_pwr", F_LOAD_PWR),
+                    ("shp_grid_l1_pwr", F_GRID_L1_PWR),
+                    ("shp_grid_l2_pwr", F_GRID_L2_PWR),
                     ("shp_l1_vol", F_L1_VOL),
                     ("shp_l2_vol", F_L2_VOL),
-                    ("shp_net_flow_pwr", F_NET_FLOW),
+                    ("shp_grid_l1_amp", F_GRID_L1_AMP),
+                    ("shp_grid_l2_amp", F_GRID_L2_AMP),
                 ):
                     v = _f(no)
                     if v is not None:
                         result[name] = round(v, 2)
+
+                # Battery contribution = load - grid. The two fields don't always
+                # share a frame (grid updates rarely while islanded), so cache the
+                # last-seen values and compute from the freshest of each.
+                if not hasattr(self, "_flows"):
+                    self._flows: dict[str, float] = {}
+                for k in ("shp_grid_pwr", "shp_load_pwr"):
+                    if k in result:
+                        self._flows[k] = result[k]
+                # Signed: positive = battery supplying the load, negative = the
+                # battery charging through the panel (grid exceeds home load).
+                if len(self._flows) == 2:
+                    result["shp_batt_pwr"] = round(
+                        self._flows["shp_load_pwr"] - self._flows["shp_grid_pwr"], 2
+                    )
 
                 # 32-circuit array: field 1015+i -> {1: volt, 2: watt, 3: amp}.
                 for i in range(CIRCUITS):
