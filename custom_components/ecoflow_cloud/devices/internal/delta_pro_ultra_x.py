@@ -12,6 +12,7 @@ from custom_components.ecoflow_cloud.devices.internal.proto import (
     ef_delta_pro_ultra_x_pb2 as dpux,
 )
 from custom_components.ecoflow_cloud.sensor import (
+    BatteryLimitSensorEntity,
     InRawWattsSolarSensorEntity,
     InWattsSensorEntity,
     LevelSensorEntity,
@@ -77,9 +78,9 @@ class DeltaProUltraX(DeltaPro3):
             # to preserve direction. Anchored live: L1 -12.37 W, L2 -12.61 W idle.
             WattsSensorEntity(client, self, "pow_get_l1", "AC Output Power L1", False),
             WattsSensorEntity(client, self, "pow_get_l2", "AC Output Power L2", False),
-            # SoC limits — config mirrors, not telemetry.
-            LevelSensorEntity(client, self, "cms_max_chg_soc", const.MAX_CHARGE_LEVEL, False),
-            LevelSensorEntity(client, self, "cms_min_dsg_soc", const.MIN_DISCHARGE_LEVEL, False),
+            # SoC limits — config thresholds, not remaining charge (no BATTERY device class).
+            BatteryLimitSensorEntity(client, self, "cms_max_chg_soc", const.MAX_CHARGE_LEVEL, False),
+            BatteryLimitSensorEntity(client, self, "cms_min_dsg_soc", const.MIN_DISCHARGE_LEVEL, False),
             # Per-pack temperature, all 10 bays.
             *[
                 TempSensorEntity(client, self, f"bp_{n}_temp", const.BATTERY_N_TEMP % n, False)
