@@ -21,30 +21,21 @@ _LOGGER = logging.getLogger(__name__)
 
 # SHP3 has 32 monitored load circuits.
 CIRCUITS = 32
-# Per-circuit metadata submessages (sub-field 5 = the user's app circuit label,
-# sub-field 3 = breaker rating A). They live in two field blocks — 794..805 (12)
-# then 920..939 (20) — in the same circuit order as the 1015..1046 power array
-# (confirmed by power correlation: a labeled high-draw circuit's measured watts
-# lined up with its position in the array). So circuit N (1-based) -> NAME_FIELDS[N-1].
+# Per-circuit metadata submessages (sub-field 5 = app circuit label, sub-field 3 =
+# breaker rating A) in two field blocks 794..805 then 920..939, in the same order as
+# the 1015..1046 power array: circuit N (1-based) -> NAME_FIELDS[N-1].
 NAME_FIELDS = list(range(794, 806)) + list(range(920, 940))
-# DisplayPropertyUpload (cmdFunc 254 / cmdId 21) per-circuit array: fields
-# 1015..1046 are one submessage per circuit {1: volt, 2: watt(signed), 3: amp}.
-# These are absent from the DP3 proto (unknown fields dropped on ParseFromString),
-# so they are recovered with a second raw pass below.
+# DisplayPropertyUpload (cmdFunc 254 / cmdId 21) per-circuit array: fields 1015..1046,
+# one submessage per circuit {1: volt, 2: watt(signed), 3: amp}. Absent from the DP3
+# proto (dropped on ParseFromString), so recovered with a second raw pass below.
 CIRCUIT_FIELD_BASE = 1015
-# Aggregate float fields (wiretype-5), labeled by comparing grid-mode capture
-# (f515 == f516 exactly, battery idle) against islanded/battery-discharge capture
-# (f515 == 0 while f516 tracks the 32-circuit sum). f964..967 satisfy the power
-# triangle VA^2 == W^2 + VAR^2 within ~0.5% on loaded frames. f1227 is a signed
-# duplicate of home load (negative = consuming), not a distinct battery flow;
-# battery contribution is computed as load - grid instead.
-F_GRID_PWR = 515  # grid real power total (0 when islanded)
-F_LOAD_PWR = 516  # home load real power total (~= sum of the 32 circuits)
+# Aggregate float fields (wiretype-5): grid power (0 when islanded) and home load;
+# battery contribution is computed as load - grid.
+F_GRID_PWR = 515
+F_LOAD_PWR = 516
 F_GRID_L1_PWR, F_GRID_L2_PWR = 962, 963
 F_L1_VOL, F_L2_VOL = 956, 957
 F_GRID_L1_AMP, F_GRID_L2_AMP = 958, 959
-# f964/965 = grid L1/L2 reactive power (VAR, signed); f966/967 = apparent (VA);
-# f1227 = -load — decoded but not exposed as sensors.
 
 
 def _read_varint(b: bytes, i: int) -> tuple[int, int]:
