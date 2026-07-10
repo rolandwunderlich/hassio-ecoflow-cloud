@@ -84,13 +84,12 @@ def _parse_fields(b: bytes) -> dict[int, list[tuple[int, Any]]]:
 
 
 class _CircuitNamed:
-    """Mixin: relabel a per-circuit entity to the device-provided circuit name.
+    """Mixin: name a per-circuit entity from the device-provided circuit label.
 
-    The SHP3 streams its circuit labels (`ch_N_name`) over the first ~minute, after
-    the entities are already built, so a static title can't use them. This overrides
-    `_updated` (called every coordinator refresh with the full params dict) to refresh
-    `_attr_name` from the label once known — names appear live, no restart needed.
-    Falls back to the original "Circuit N …" title until the label arrives.
+    The SHP3 streams circuit labels (`ch_N_name`) over the first ~minute, after the
+    entities are built. The name is derived live from coordinator params (single
+    source of truth, so an app-side rename is picked up too), falling back to the
+    original "Circuit N …" title until the label arrives.
     """
 
     def for_circuit(self, n: int, suffix: str) -> Any:
@@ -98,21 +97,33 @@ class _CircuitNamed:
         self._circuit_suffix = suffix
         return self
 
+    def _circuit_name(self) -> str:
+        data = getattr(self._device, "data", None)
+        params = data.params if data is not None else {}
+        label = params.get(f"ch_{self._circuit_no}_name")
+        if not label:
+            return self._attr_name
+        partner = params.get(f"ch_{self._circuit_no}_partner")
+        if partner:
+            # Primary leg carries the combined 240V load; the secondary reads 0.
+            label += " (240V L2)" if partner < self._circuit_no else " (240V)"
+        return f"{label} {self._circuit_suffix}"
+
+    @property
+    def name(self) -> str:
+        return self._circuit_name()
+
+    def title(self) -> str:
+        return self._circuit_name()
+
     def _updated(self, data: dict[str, Any]) -> None:
-        label = data.get(f"ch_{self._circuit_no}_name")
-        if label:
-            partner = data.get(f"ch_{self._circuit_no}_partner")
-            if partner:
-                # Primary leg carries the combined 240V load; the secondary reads 0.
-                label += " (240V L2)" if partner < self._circuit_no else " (240V)"
-            new_name = f"{label} {self._circuit_suffix}"
-            if self._attr_name != new_name:
-                self._attr_name = new_name
-                # Force a state write so idle circuits (no value change) still pick
-                # up the label as soon as it streams in, not only when W changes.
-                if getattr(self, "hass", None) is not None:
-                    self.schedule_update_ha_state()
         super()._updated(data)  # type: ignore[misc]
+        # Force one state write when the label first streams in, so idle circuits
+        # (no value change) pick up their name immediately.
+        if not getattr(self, "_labelled", False) and data.get(f"ch_{self._circuit_no}_name"):
+            self._labelled = True
+            if getattr(self, "hass", None) is not None:
+                self.schedule_update_ha_state()
 
 
 class NamedCircuitWatts(_CircuitNamed, WattsSensorEntity):
