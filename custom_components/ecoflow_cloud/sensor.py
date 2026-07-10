@@ -700,10 +700,11 @@ class IntegralEnergySensorEntity(IntegrationSensor):
     _attr_entity_registry_visible_default = False
 
     def __init__(self, base: WattsSensorEntity, enabled_default: bool = True):
+        self._base = base
         super().__init__(
             base.coordinator.hass,
             integration_method="left",
-            name=f"{base._device.device_info.name} {base.title().replace(f'{const.POWER}', f' {const.ENERGY}')}",
+            name=self._energy_title(),
             round_digits=4,
             source_entity=base.entity_id,
             unique_id=f"{base._attr_unique_id}_energy",
@@ -713,6 +714,15 @@ class IntegralEnergySensorEntity(IntegrationSensor):
         )
         self.device_info = base.device_info
         self._attr_entity_registry_enabled_default = enabled_default and base.enabled_default
+
+    def _energy_title(self) -> str:
+        return f"{self._base._device.device_info.name} {self._base.title().replace(const.POWER, const.ENERGY)}"
+
+    @property
+    def name(self) -> str:
+        # Follow the source power sensor's name live, so a dynamically-relabeled
+        # circuit (SHP3) and its energy companion always share the same label.
+        return self._energy_title()
 
 
 class SolarPowerSensorEntity(WattsSensorEntity):
