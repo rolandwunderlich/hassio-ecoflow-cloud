@@ -148,13 +148,15 @@ class SmartHomePanel3(DeltaPro3):
             # import, and the battery's contribution (computed load - grid).
             WattsSensorEntity(client, self, "shp_load_pwr", "Home Load Power").with_energy(),
             WattsSensorEntity(client, self, "shp_grid_pwr", "Grid Power").with_energy(),
-            WattsSensorEntity(client, self, "shp_batt_pwr", "Battery Output Power"),
+            # "Storage" = EcoFlow's term for the non-grid source (battery, and any
+            # generator on the connection box), which is what load - grid measures.
+            WattsSensorEntity(client, self, "shp_batt_pwr", "Storage Output Power"),
             QuotaStatusSensorEntity(client, self),
             # Grid-side per-leg detail + line voltage — disabled by default.
             WattsSensorEntity(client, self, "shp_grid_l1_pwr", "Grid L1 Power", False),
             WattsSensorEntity(client, self, "shp_grid_l2_pwr", "Grid L2 Power", False),
-            VoltSensorEntity(client, self, "shp_l1_vol", "L1 Voltage", False),
-            VoltSensorEntity(client, self, "shp_l2_vol", "L2 Voltage", False),
+            VoltSensorEntity(client, self, "shp_l1_vol", "Grid L1 Voltage", False),
+            VoltSensorEntity(client, self, "shp_l2_vol", "Grid L2 Voltage", False),
             AmpSensorEntity(client, self, "shp_grid_l1_amp", "Grid L1 Current", False),
             AmpSensorEntity(client, self, "shp_grid_l2_amp", "Grid L2 Current", False),
         ]
@@ -246,11 +248,10 @@ class SmartHomePanel3(DeltaPro3):
                     if 1 in sub:
                         result[f"ch_{n}_vol"] = round(sub[1][0][1], 2)
                     if 2 in sub:
-                        # EcoFlow signs load consumption negative (power flowing out
-                        # of the panel bus to the branch load). Negate so consumption
-                        # reads positive — matches system_power and the HA Energy
-                        # dashboard's "individual device" consumption convention.
-                        result[f"ch_{n}_pwr"] = round(-sub[2][0][1], 2)
+                        # EcoFlow signs branch consumption negative; negate to read
+                        # positive, and clamp idle-noise negatives to 0 so the
+                        # integrated energy stays monotonic (total_increasing).
+                        result[f"ch_{n}_pwr"] = max(round(-sub[2][0][1], 2), 0.0)
                     if 3 in sub:
                         result[f"ch_{n}_amp"] = round(sub[3][0][1], 2)
 
