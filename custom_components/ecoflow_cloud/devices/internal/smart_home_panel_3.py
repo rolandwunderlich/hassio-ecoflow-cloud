@@ -299,15 +299,19 @@ class SmartHomePanel3(DeltaPro3):
                         continue
                     sub = _parse_fields(entry[0][1])
                     n = i + 1
-                    if 1 in sub:
-                        result[f"ch_{n}_vol"] = round(sub[1][0][1], 2)
-                    if 2 in sub:
-                        # EcoFlow signs branch consumption negative; negate to read
-                        # positive, and clamp idle-noise negatives to 0 so the
-                        # integrated energy stays monotonic (total_increasing).
-                        result[f"ch_{n}_pwr"] = max(round(-sub[2][0][1], 2), 0.0)
-                    if 3 in sub:
-                        result[f"ch_{n}_amp"] = round(sub[3][0][1], 2)
+                    # The panel sends every circuit's entry each frame, but proto3
+                    # omits a sub-field whose value is 0. So an absent watt/amp means
+                    # the circuit is idle (0), NOT "unchanged" — set it explicitly.
+                    # Leaving it unset lets the coordinator's param merge retain the
+                    # last drawn value, which latches an idle circuit (e.g. an AC
+                    # condenser that just cycled off) at ~kW and massively inflates
+                    # its integrated energy.
+                    result[f"ch_{n}_vol"] = round(sub[1][0][1], 2) if 1 in sub else 0.0
+                    # EcoFlow signs branch consumption negative; negate to read
+                    # positive, and clamp idle-noise negatives to 0 so the integrated
+                    # energy stays monotonic (total_increasing).
+                    result[f"ch_{n}_pwr"] = max(round(-sub[2][0][1], 2), 0.0) if 2 in sub else 0.0
+                    result[f"ch_{n}_amp"] = round(sub[3][0][1], 2) if 3 in sub else 0.0
 
                 # Circuit metadata submessages (rotate in over several frames):
                 # sub-field 5 = app label; sub-field 2 = split-phase link {2: partner}.
