@@ -72,8 +72,10 @@ class DeltaProUltraX(DeltaPro3):
             OutWattsSensorEntity(client, self, "pow_get_ac", const.AC_OUT_POWER, False),
             OutWattsSensorEntity(client, self, "pow_get_ac_hv_out", "AC HV Output Power", False),
             OutWattsSensorEntity(client, self, "pow_get_ac_lv_out", "AC LV Output Power", False),
-            InRawWattsSolarSensorEntity(client, self, "pow_get_pv_h", "Solar High Voltage Input Power", False),
-            InRawWattsSolarSensorEntity(client, self, "pow_get_pv_l", "Solar Low Voltage Input Power", False),
+            # Two symmetric high-voltage PV inputs (80-500 V, 5 kW each) — not HV/LV
+            # like the non-X Delta Pro Ultra; name them as circuits 1/2 per the manual.
+            InRawWattsSolarSensorEntity(client, self, "pow_get_pv_h", const.SOLAR_1_IN_POWER, False),
+            InRawWattsSolarSensorEntity(client, self, "pow_get_pv_l", const.SOLAR_2_IN_POWER, False),
             FrequencySensorEntity(client, self, "ac_out_freq", "AC Output Frequency", False),
             # Per-phase output power (fields 353/354), signed to preserve direction.
             OutWattsSensorEntity(client, self, "pow_get_l1", "AC Output Power L1", False),
