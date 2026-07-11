@@ -13,6 +13,7 @@ from custom_components.ecoflow_cloud.devices.internal.proto import (
 )
 from custom_components.ecoflow_cloud.sensor import (
     BatteryLimitSensorEntity,
+    FrequencySensorEntity,
     InRawWattsSolarSensorEntity,
     InWattsSensorEntity,
     LevelSensorEntity,
@@ -20,7 +21,6 @@ from custom_components.ecoflow_cloud.sensor import (
     QuotaStatusSensorEntity,
     RemainSensorEntity,
     TempSensorEntity,
-    WattsSensorEntity,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,10 +74,10 @@ class DeltaProUltraX(DeltaPro3):
             OutWattsSensorEntity(client, self, "pow_get_ac_lv_out", "AC LV Output Power", False),
             InRawWattsSolarSensorEntity(client, self, "pow_get_pv_h", "Solar High Voltage Input Power", False),
             InRawWattsSolarSensorEntity(client, self, "pow_get_pv_l", "Solar Low Voltage Input Power", False),
-            # Per-phase output power (fields 353/354). Signed -> plain WattsSensorEntity
-            # to preserve direction. Anchored live: L1 -12.37 W, L2 -12.61 W idle.
-            WattsSensorEntity(client, self, "pow_get_l1", "AC Output Power L1", False),
-            WattsSensorEntity(client, self, "pow_get_l2", "AC Output Power L2", False),
+            FrequencySensorEntity(client, self, "ac_out_freq", "AC Output Frequency", False),
+            # Per-phase output power (fields 353/354), signed to preserve direction.
+            OutWattsSensorEntity(client, self, "pow_get_l1", "AC Output Power L1", False),
+            OutWattsSensorEntity(client, self, "pow_get_l2", "AC Output Power L2", False),
             # SoC limits — config thresholds, not remaining charge (no BATTERY device class).
             BatteryLimitSensorEntity(client, self, "cms_max_chg_soc", const.MAX_CHARGE_LEVEL, False),
             BatteryLimitSensorEntity(client, self, "cms_min_dsg_soc", const.MIN_DISCHARGE_LEVEL, False),

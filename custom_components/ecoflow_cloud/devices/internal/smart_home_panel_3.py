@@ -11,6 +11,9 @@ from custom_components.ecoflow_cloud.devices import const
 from custom_components.ecoflow_cloud.devices.internal.delta_pro_3 import DeltaPro3
 from custom_components.ecoflow_cloud.sensor import (
     AmpSensorEntity,
+    InAmpSensorEntity,
+    InVoltSensorEntity,
+    InWattsSensorEntity,
     LevelSensorEntity,
     QuotaStatusSensorEntity,
     VoltSensorEntity,
@@ -148,19 +151,23 @@ class SmartHomePanel3(DeltaPro3):
             # The three headline flows, each with integrated energy (kWh,
             # total_increasing) for the HA Energy dashboard: home load, grid
             # import, and the battery's contribution (computed load - grid).
-            WattsSensorEntity(client, self, "shp_load_pwr", "Home Load Power").with_energy(),
-            WattsSensorEntity(client, self, "shp_grid_pwr", "Grid Power").with_energy(),
+            WattsSensorEntity(client, self, "shp_load_pwr", "Home Load Power")
+            .with_icon("mdi:home-lightning-bolt")
+            .with_energy(),
+            InWattsSensorEntity(client, self, "shp_grid_pwr", "Grid Power").with_energy(),
             # "Storage" = EcoFlow's term for the non-grid source (battery, and any
             # generator on the connection box), which is what load - grid measures.
-            WattsSensorEntity(client, self, "shp_batt_pwr", "Storage Output Power"),
+            WattsSensorEntity(client, self, "shp_batt_pwr", "Storage Output Power").with_icon(
+                "mdi:home-battery"
+            ),
             QuotaStatusSensorEntity(client, self),
-            # Grid-side per-leg detail + line voltage — disabled by default.
-            WattsSensorEntity(client, self, "shp_grid_l1_pwr", "Grid L1 Power", False),
-            WattsSensorEntity(client, self, "shp_grid_l2_pwr", "Grid L2 Power", False),
-            VoltSensorEntity(client, self, "shp_l1_vol", "Grid L1 Voltage", False),
-            VoltSensorEntity(client, self, "shp_l2_vol", "Grid L2 Voltage", False),
-            AmpSensorEntity(client, self, "shp_grid_l1_amp", "Grid L1 Current", False),
-            AmpSensorEntity(client, self, "shp_grid_l2_amp", "Grid L2 Current", False),
+            # Grid-side per-leg detail — disabled by default.
+            InWattsSensorEntity(client, self, "shp_grid_l1_pwr", "Grid L1 Power", False),
+            InWattsSensorEntity(client, self, "shp_grid_l2_pwr", "Grid L2 Power", False),
+            InVoltSensorEntity(client, self, "shp_l1_vol", "Grid L1 Voltage", False),
+            InVoltSensorEntity(client, self, "shp_l2_vol", "Grid L2 Voltage", False),
+            InAmpSensorEntity(client, self, "shp_grid_l1_amp", "Grid L1 Current", False),
+            InAmpSensorEntity(client, self, "shp_grid_l2_amp", "Grid L2 Current", False),
         ]
         # 32 per-circuit sensors: power enabled (the M1b payoff) with a companion
         # integrated energy sensor (kWh) for the Energy dashboard's per-device

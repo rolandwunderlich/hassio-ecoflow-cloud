@@ -724,6 +724,11 @@ class IntegralEnergySensorEntity(IntegrationSensor):
         # circuit (SHP3) and its energy companion always share the same label.
         return self._energy_title()
 
+    @property
+    def icon(self) -> str | None:
+        # Match the source's icon so e.g. Grid Energy shows the grid icon.
+        return self._base.icon
+
 
 class SolarPowerSensorEntity(WattsSensorEntity):
     _attr_entity_category = None
