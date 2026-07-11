@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import struct
 from typing import Any, override
@@ -5,6 +6,8 @@ from typing import Any, override
 from homeassistant.components.number import NumberEntity
 from homeassistant.components.select import SelectEntity
 from homeassistant.components.switch import SwitchEntity
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 
 from custom_components.ecoflow_cloud.api import EcoflowApiClient
 from custom_components.ecoflow_cloud.devices import const
@@ -206,6 +209,33 @@ class SmartHomePanel3(DeltaPro3):
     def selects(self, client: EcoflowApiClient) -> list[SelectEntity]:
         return []
 
+    def configure(self, hass: HomeAssistant) -> None:
+        super().configure(hass)
+        self._hass = hass
+        self._store: Store[dict] = Store(hass, 1, f"ecoflow_cloud.{self.device_info.sn}.circuit_names")
+
+    async def async_restore_state(self) -> None:
+        # Load persisted circuit labels before entities are built, so names are
+        # correct immediately after a restart/reload instead of showing "Circuit N"
+        # until the panel re-streams its metadata.
+        data = await self._store.async_load()
+        if data:
+            self._meta = {int(n): m for n, m in data.items()}
+            self._publish_meta(self.data.params)
+
+    def _publish_meta(self, result: dict[str, Any]) -> None:
+        for n, m in self._meta.items():
+            if "name" in m:
+                result[f"ch_{n}_name"] = m["name"]
+            if "partner" in m:
+                result[f"ch_{n}_partner"] = m["partner"]
+
+    def _save_meta(self) -> None:
+        asyncio.run_coroutine_threadsafe(
+            self._store.async_save({str(n): m for n, m in self._meta.items()}),
+            self._hass.loop,
+        )
+
     @override
     def _decode_message_by_type(self, pdata: bytes, header_info: dict[str, Any]) -> dict[str, Any]:
         result = super()._decode_message_by_type(pdata, header_info)
@@ -264,12 +294,11 @@ class SmartHomePanel3(DeltaPro3):
                     if 3 in sub:
                         result[f"ch_{n}_amp"] = round(sub[3][0][1], 2)
 
-                # Circuit metadata submessages (rotate in over several frames, so
-                # cache on the instance): sub-field 5 = the user's app label;
-                # sub-field 2 = split-phase link {1: linkMark, 2: partner circuit#}
-                # (present only on 240V circuits).
+                # Circuit metadata submessages (rotate in over several frames):
+                # sub-field 5 = app label; sub-field 2 = split-phase link {2: partner}.
                 if not hasattr(self, "_meta"):
                     self._meta: dict[int, dict[str, Any]] = {}
+                before = {n: dict(m) for n, m in self._meta.items()}
                 for n, fld in enumerate(NAME_FIELDS, 1):
                     entry = fields.get(fld)
                     if not entry or entry[0][0] != 2:
@@ -286,12 +315,10 @@ class SmartHomePanel3(DeltaPro3):
                         partner = _parse_fields(link[0][1]).get(2)
                         if partner and partner[0][0] == 0:
                             self._meta.setdefault(n, {})["partner"] = partner[0][1]
-                # Publish cached metadata into params every frame (for sensor naming).
-                for n, m in self._meta.items():
-                    if "name" in m:
-                        result[f"ch_{n}_name"] = m["name"]
-                    if "partner" in m:
-                        result[f"ch_{n}_partner"] = m["partner"]
+                # Persist labels across restart/reload, but only when they change.
+                if self._meta != before:
+                    self._save_meta()
+                self._publish_meta(result)
                 # Combine each 240V pair onto the primary (lower-numbered) leg and zero
                 # the secondary, so the appliance reads once and energy isn't doubled.
                 for n, m in self._meta.items():
