@@ -70,8 +70,10 @@ class DeltaProUltraX(DeltaPro3):
             # scalars); populate under load.
             InWattsSensorEntity(client, self, "pow_get_ac_in", const.AC_IN_POWER, False),
             OutWattsSensorEntity(client, self, "pow_get_ac", const.AC_OUT_POWER, False),
-            OutWattsSensorEntity(client, self, "pow_get_ac_hv_out", "AC HV Output Power", False),
-            OutWattsSensorEntity(client, self, "pow_get_ac_lv_out", "AC LV Output Power", False),
+            # HV/LV = the 240V (line-to-line) and 120V (line-to-neutral) rails of the
+            # split-phase output — the X has no HV/LV concept; name by voltage.
+            OutWattsSensorEntity(client, self, "pow_get_ac_hv_out", "AC 240V Output Power", False),
+            OutWattsSensorEntity(client, self, "pow_get_ac_lv_out", "AC 120V Output Power", False),
             # Two symmetric high-voltage PV inputs (80-500 V, 5 kW each) — not HV/LV
             # like the non-X Delta Pro Ultra; name them as circuits 1/2 per the manual.
             InRawWattsSolarSensorEntity(client, self, "pow_get_pv_h", const.SOLAR_1_IN_POWER, False),
