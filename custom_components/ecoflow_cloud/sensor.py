@@ -54,6 +54,9 @@ from .entities import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Coordinator-driven, read-only sensors — no per-entity I/O on update.
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     client: EcoflowApiClient = hass.data[ECOFLOW_DOMAIN][entry.entry_id]
@@ -695,6 +698,7 @@ class QuotaScheduledStatusSensorEntity(QuotaStatusSensorEntity):
 class IntegralEnergySensorEntity(IntegrationSensor):
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_has_entity_name = True
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_entity_registry_visible_default = False
@@ -716,7 +720,8 @@ class IntegralEnergySensorEntity(IntegrationSensor):
         self._attr_entity_registry_enabled_default = enabled_default and base.enabled_default
 
     def _energy_title(self) -> str:
-        return f"{self._base._device.device_info.name} {self._base.title().replace(const.POWER, const.ENERGY)}"
+        # has_entity_name → return only the entity part; HA prepends the device name.
+        return self._base.title().replace(const.POWER, const.ENERGY)
 
     @property
     def name(self) -> str:
