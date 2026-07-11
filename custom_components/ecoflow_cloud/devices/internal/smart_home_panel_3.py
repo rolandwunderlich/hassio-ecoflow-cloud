@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import struct
-from typing import Any, override
+from typing import TYPE_CHECKING, Any, override
 
 from homeassistant.components.number import NumberEntity
 from homeassistant.components.select import SelectEntity
@@ -63,6 +63,7 @@ def _parse_fields(b: bytes) -> dict[int, list[tuple[int, Any]]]:
         try:
             tag, i = _read_varint(b, i)
             fn, wt = tag >> 3, tag & 7
+            v: Any
             if wt == 0:
                 v, i = _read_varint(b, i)
             elif wt == 2:
@@ -80,7 +81,15 @@ def _parse_fields(b: bytes) -> dict[int, list[tuple[int, Any]]]:
     return out
 
 
-class _CircuitNamed:
+if TYPE_CHECKING:
+    from custom_components.ecoflow_cloud.entities import BaseSensorEntity
+
+    _CircuitNamedBase = BaseSensorEntity
+else:
+    _CircuitNamedBase = object
+
+
+class _CircuitNamed(_CircuitNamedBase):
     """Mixin: name a per-circuit entity from the device-provided circuit label.
 
     The SHP3 streams circuit labels (`ch_N_name`) over the first ~minute, after the
@@ -146,6 +155,8 @@ class SmartHomePanel3(DeltaPro3):
     Read-only: no control entities until actuation is deliberately in scope (M3).
     """
 
+    _meta: dict[int, dict[str, Any]]
+
     @override
     def sensors(self, client: EcoflowApiClient) -> list[Any]:
         out: list[Any] = [
@@ -164,13 +175,13 @@ class SmartHomePanel3(DeltaPro3):
                 "mdi:home-battery"
             ),
             QuotaStatusSensorEntity(client, self),
-            # Grid-side per-leg detail — disabled by default.
-            InWattsSensorEntity(client, self, "shp_grid_l1_pwr", "Grid L1 Power", False),
-            InWattsSensorEntity(client, self, "shp_grid_l2_pwr", "Grid L2 Power", False),
-            InVoltSensorEntity(client, self, "shp_l1_vol", "Grid L1 Voltage", False),
-            InVoltSensorEntity(client, self, "shp_l2_vol", "Grid L2 Voltage", False),
-            InAmpSensorEntity(client, self, "shp_grid_l1_amp", "Grid L1 Current", False),
-            InAmpSensorEntity(client, self, "shp_grid_l2_amp", "Grid L2 Current", False),
+            # Grid-side per-leg detail — disabled by default, diagnostic category.
+            InWattsSensorEntity(client, self, "shp_grid_l1_pwr", "Grid L1 Power", False, diagnostic=True),
+            InWattsSensorEntity(client, self, "shp_grid_l2_pwr", "Grid L2 Power", False, diagnostic=True),
+            InVoltSensorEntity(client, self, "shp_l1_vol", "Grid L1 Voltage", False, diagnostic=True),
+            InVoltSensorEntity(client, self, "shp_l2_vol", "Grid L2 Voltage", False, diagnostic=True),
+            InAmpSensorEntity(client, self, "shp_grid_l1_amp", "Grid L1 Current", False, diagnostic=True),
+            InAmpSensorEntity(client, self, "shp_grid_l2_amp", "Grid L2 Current", False, diagnostic=True),
         ]
         # 32 per-circuit sensors: power enabled (the M1b payoff) with a companion
         # integrated energy sensor (kWh) for the Energy dashboard's per-device
@@ -190,10 +201,14 @@ class SmartHomePanel3(DeltaPro3):
                 NamedCircuitWatts(client, self, f"ch_{n}_pwr", f"{label} Power").for_circuit(n, "Power").with_energy()
             )
             out.append(
-                NamedCircuitVolt(client, self, f"ch_{n}_vol", f"{label} Voltage", False).for_circuit(n, "Voltage")
+                NamedCircuitVolt(client, self, f"ch_{n}_vol", f"{label} Voltage", False, diagnostic=True).for_circuit(
+                    n, "Voltage"
+                )
             )
             out.append(
-                NamedCircuitAmp(client, self, f"ch_{n}_amp", f"{label} Current", False).for_circuit(n, "Current")
+                NamedCircuitAmp(client, self, f"ch_{n}_amp", f"{label} Current", False, diagnostic=True).for_circuit(
+                    n, "Current"
+                )
             )
         return out
 
@@ -297,7 +312,7 @@ class SmartHomePanel3(DeltaPro3):
                 # Circuit metadata submessages (rotate in over several frames):
                 # sub-field 5 = app label; sub-field 2 = split-phase link {2: partner}.
                 if not hasattr(self, "_meta"):
-                    self._meta: dict[int, dict[str, Any]] = {}
+                    self._meta = {}
                 before = {n: dict(m) for n, m in self._meta.items()}
                 for n, fld in enumerate(NAME_FIELDS, 1):
                     entry = fields.get(fld)
