@@ -263,9 +263,27 @@ class SmartHomePanel3(DeltaPro3):
                     vals = fields.get(no)
                     return vals[0][1] if vals and vals[0][0] == 5 else None
 
+                # Grid import and home load travel as one report group (they share
+                # every full frame; a lighter frame variant omits the whole group).
+                # proto3 drops a float field that equals 0, so when the house is
+                # islanded and grid import is 0, field 515 simply vanishes. Left
+                # unset it would keep its last (daytime) value through the coordinator
+                # param merge — inflating Grid energy and flipping the computed battery
+                # power to "charging" all evening. Home load is realistically never 0,
+                # so its presence marks a frame that carries this group; within such a
+                # frame an absent grid means 0 import, not "unchanged". (The lighter
+                # variant omits load too, so we correctly leave both alone there.)
+                load = _f(F_LOAD_PWR)
+                if load is not None:
+                    result["shp_load_pwr"] = round(load, 2)
+                    grid = _f(F_GRID_PWR)
+                    result["shp_grid_pwr"] = round(grid if grid is not None else 0.0, 2)
+
+                # Per-leg grid voltage / current / power are sampled sparsely — a value
+                # can be absent from a frame without being 0 (grid voltage was present
+                # in only ~80% of frames on a full-grid day), so keep skip-if-absent;
+                # forcing 0 would inject false zeros. Diagnostic only (no energy).
                 for name, no in (
-                    ("shp_grid_pwr", F_GRID_PWR),
-                    ("shp_load_pwr", F_LOAD_PWR),
                     ("shp_grid_l1_pwr", F_GRID_L1_PWR),
                     ("shp_grid_l2_pwr", F_GRID_L2_PWR),
                     ("shp_l1_vol", F_L1_VOL),
@@ -277,9 +295,10 @@ class SmartHomePanel3(DeltaPro3):
                     if v is not None:
                         result[name] = round(v, 2)
 
-                # Battery contribution = load - grid. The two fields don't always
-                # share a frame (grid updates rarely while islanded), so cache the
-                # last-seen values and compute from the freshest of each.
+                # Battery contribution = load - grid. Both are set together above
+                # (a full frame carries the group; a lighter variant carries neither),
+                # so cache the last-seen pair to carry it across the variant frames
+                # that don't refresh it.
                 if not hasattr(self, "_flows"):
                     self._flows: dict[str, float] = {}
                 for k in ("shp_grid_pwr", "shp_load_pwr"):
