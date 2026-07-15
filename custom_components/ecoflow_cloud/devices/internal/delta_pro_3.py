@@ -372,8 +372,7 @@ class DeltaPro3(BaseInternalDevice):
             decoded_data = self._decode_message_by_type(decoded_pdata, header_info)
             if not decoded_data:
                 # Routine: devices interleave frames carrying only fields the
-                # proto doesn't declare (or unknown cmdIds); at WARNING this
-                # spams the journal on every such frame.
+                # proto doesn't declare (or unknown cmdIds).
                 _LOGGER.debug(
                     "No known fields in message (cmdFunc=%s, cmdId=%s, %d bytes)",
                     header_info.get("cmdFunc"),
@@ -587,7 +586,7 @@ class DeltaPro3(BaseInternalDevice):
                     # Fall through to unknown message type
 
             # Unknown message type - try BMSHeartBeatReport as fallback.
-            # Routine app-API chatter (one-off cmdIds); debug, not warning.
+            # Routine app-API chatter (one-off cmdIds).
             _LOGGER.debug(f"Unknown message type: cmdFunc={cmd_func}, cmdId={cmd_id}, size={len(pdata)} bytes")
 
             # Try to decode as BMSHeartBeatReport since that's a common case
