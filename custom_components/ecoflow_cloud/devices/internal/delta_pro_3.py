@@ -371,7 +371,15 @@ class DeltaPro3(BaseInternalDevice):
             # 4. Protobuf message decode
             decoded_data = self._decode_message_by_type(decoded_pdata, header_info)
             if not decoded_data:
-                _LOGGER.warning("Message decoding failed")
+                # Routine: devices interleave frames carrying only fields the
+                # proto doesn't declare (or unknown cmdIds); at WARNING this
+                # spams the journal on every such frame.
+                _LOGGER.debug(
+                    "No known fields in message (cmdFunc=%s, cmdId=%s, %d bytes)",
+                    header_info.get("cmdFunc"),
+                    header_info.get("cmdId"),
+                    len(decoded_pdata),
+                )
                 return {}
 
             # 5. Flatten all fields for params
