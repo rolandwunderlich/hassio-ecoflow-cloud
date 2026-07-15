@@ -586,8 +586,9 @@ class DeltaPro3(BaseInternalDevice):
                     _LOGGER.debug(f"Failed to decode as BMSHeartBeatReport (cmdFunc={cmd_func}, cmdId={cmd_id}): {e}")
                     # Fall through to unknown message type
 
-            # Unknown message type - try BMSHeartBeatReport as fallback
-            _LOGGER.warning(f"Unknown message type: cmdFunc={cmd_func}, cmdId={cmd_id}, size={len(pdata)} bytes")
+            # Unknown message type - try BMSHeartBeatReport as fallback.
+            # Routine app-API chatter (one-off cmdIds); debug, not warning.
+            _LOGGER.debug(f"Unknown message type: cmdFunc={cmd_func}, cmdId={cmd_id}, size={len(pdata)} bytes")
 
             # Try to decode as BMSHeartBeatReport since that's a common case
             try:
