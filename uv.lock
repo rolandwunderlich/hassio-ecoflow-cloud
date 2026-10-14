@@ -973,7 +973,7 @@ requires-dist = [
     { name = "homeassistant", specifier = "==2026.8.0" },
     { name = "jsonpath-ng", specifier = ">=1.7.0" },
     { name = "paho-mqtt", specifier = "==2.1.0" },
-    { name = "protobuf", specifier = "==6.32.0" },
+    { name = "protobuf", specifier = ">=6.32.0,<8" },
 ]
 
 [package.metadata.requires-dev]
