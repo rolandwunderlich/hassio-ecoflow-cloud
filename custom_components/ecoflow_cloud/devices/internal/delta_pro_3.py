@@ -349,7 +349,9 @@ class DeltaPro3(BaseInternalDevice):
         _LOGGER.debug(f"[DeltaPro3] _prepare_data called with {len(raw_data)} bytes")
 
         # Status messages and command replies can be JSON rather than protobuf.
-        if raw_data.lstrip().startswith(b"{"):
+        # Check the first byte only: lstrip() would also strip a protobuf
+        # envelope's leading 0x0a, and a 125-byte envelope continues with 0x7b.
+        if raw_data[:1] == b"{":
             return super()._prepare_data(raw_data)
 
         flat_dict: dict[str, Any] | None = None
