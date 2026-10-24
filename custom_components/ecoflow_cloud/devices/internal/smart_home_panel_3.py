@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import struct
+import time
 from typing import TYPE_CHECKING, Any, Self, override
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
@@ -58,6 +59,8 @@ F_PANEL_MODE = 1245  # submessage of mode flags, see PANEL_MODES
 PANEL_MODES = {1: "self_powered", 2: "scheduled", 3: "tou", 5: "mix_scheduled", 6: "intelligent"}
 PANEL_MODE_EPS = 4
 GRID_STA_ON = {1: True, 2: False, 3: True}
+# 2.5 full-frame periods: one lost frame is tolerated, a dead stream is not.
+PANEL_STATE_STALE_S = 300
 
 # Protobuf wire types (as tagged by _parse_fields).
 WIRE_VARINT = 0
@@ -120,11 +123,13 @@ def _first(fields: FieldMap, no: int, wire_type: int) -> Any | None:
 
 
 if TYPE_CHECKING:
-    from custom_components.ecoflow_cloud.entities import BaseSensorEntity
+    from custom_components.ecoflow_cloud.entities import BaseSensorEntity, EcoFlowDictEntity
 
     _CircuitNamedBase = BaseSensorEntity
+    _PanelStateBase = EcoFlowDictEntity
 else:
     _CircuitNamedBase = object
+    _PanelStateBase = object
 
 
 class _CircuitNamed(_CircuitNamedBase):
@@ -185,7 +190,37 @@ class NamedCircuitAmp(_CircuitNamed, AmpSensorEntity):
     pass
 
 
-class GridStatusBinarySensorEntity(MiscBinarySensorEntity):
+class _PanelState(_PanelStateBase):
+    """Mixin: unavailable once the panel-state value is PANEL_STATE_STALE_S old.
+
+    These values arrive only in the 120 s full frames and hold in between, so
+    without this a lost frame stream would show the last value indefinitely.
+    """
+
+    @property
+    def available(self) -> bool:
+        seen = getattr(self._device, "panel_state_seen", {}).get(self.mqtt_key)
+        fresh = seen is not None and time.monotonic() - seen < PANEL_STATE_STALE_S
+        return super().available and fresh
+
+    def _handle_coordinator_update(self) -> None:
+        super()._handle_coordinator_update()  # type: ignore[misc]
+        # The base class writes state only on a new value; going stale is not one.
+        available = self.available
+        if available != getattr(self, "_written_available", None):
+            self._written_available = available
+            self.schedule_update_ha_state()
+
+
+class PanelStateBinarySensorEntity(_PanelState, MiscBinarySensorEntity):
+    pass
+
+
+class BackupReserveSensorEntity(_PanelState, BatteryLimitSensorEntity):
+    pass
+
+
+class GridStatusBinarySensorEntity(_PanelState, MiscBinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.POWER
 
     def _update_value(self, val: Any) -> bool:
@@ -194,12 +229,12 @@ class GridStatusBinarySensorEntity(MiscBinarySensorEntity):
         return True
 
 
-class ChargeLimitSensorEntity(MiscSensorEntity):
+class ChargeLimitSensorEntity(_PanelState, MiscSensorEntity):  # type: ignore[misc]
     _attr_device_class = SensorDeviceClass.POWER
     _attr_native_unit_of_measurement = UnitOfPower.WATT
 
 
-class PanelModeSensorEntity(MiscSensorEntity):
+class PanelModeSensorEntity(_PanelState, MiscSensorEntity):  # type: ignore[misc]
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["backup", *PANEL_MODES.values()]
 
@@ -234,6 +269,8 @@ class SmartHomePanel3(DeltaPro3):
         self._meta: dict[int, dict[str, Any]] = {}
         # Last-seen grid/load pair, carried across frames that omit the group.
         self._flows: dict[str, float] = {}
+        # Panel-state key -> monotonic time it was last decoded (see _PanelState).
+        self.panel_state_seen: dict[str, float] = {}
 
     @override
     def sensors(self, client: EcoflowApiClient) -> list[SensorEntity]:
@@ -259,7 +296,7 @@ class SmartHomePanel3(DeltaPro3):
             InAmpSensorEntity(client, self, "shp_grid_l1_amp", "Grid L1 Current", False, diagnostic=True),
             InAmpSensorEntity(client, self, "shp_grid_l2_amp", "Grid L2 Current", False, diagnostic=True),
             # Panel settings, read-only. Updated every 120 s (full frame).
-            BatteryLimitSensorEntity(client, self, "shp_backup_reserve", "Backup Reserve", diagnostic=True),
+            BackupReserveSensorEntity(client, self, "shp_backup_reserve", "Backup Reserve", diagnostic=True),
             PanelModeSensorEntity(client, self, "shp_panel_mode", "Operating Mode"),
             ChargeLimitSensorEntity(client, self, "shp_charge_limit", "Charge Power Limit"),
         ]
@@ -294,10 +331,10 @@ class SmartHomePanel3(DeltaPro3):
     def binary_sensors(self, client: EcoflowApiClient) -> list[BinarySensorEntity]:
         return [
             GridStatusBinarySensorEntity(client, self, "shp_grid_sta", "Grid"),
-            MiscBinarySensorEntity(
+            PanelStateBinarySensorEntity(
                 client, self, "shp_grid_energized", "Grid Energized", False, diagnostic=True
             ).with_device_class("power"),
-            MiscBinarySensorEntity(client, self, "shp_eps_mode", "EPS Mode", diagnostic=True),
+            PanelStateBinarySensorEntity(client, self, "shp_eps_mode", "EPS Mode", diagnostic=True),
         ]
 
     @override
@@ -397,10 +434,12 @@ class SmartHomePanel3(DeltaPro3):
         # 619 and 461 have no reliable marker for their frame, so absent means
         # "not in this frame" and the last value holds. Grid offline is 2, so
         # it survives zero-omission; a 0 % reserve would not (it holds).
+        now = time.monotonic()
         for key, no in (("shp_grid_sta", F_GRID_STA), ("shp_backup_reserve", F_BACKUP_RESERVE)):
             v = _first(fields, no, WIRE_VARINT)
             if v is not None:
                 result[key] = v
+                self.panel_state_seen[key] = now
 
         # The mode submessage marks the 752/1244 frame, and within it an absent
         # value means 0: grid de-energized, no charge limit (zero-omission, see
@@ -415,6 +454,8 @@ class SmartHomePanel3(DeltaPro3):
         result["shp_eps_mode"] = bool(_first(flags, PANEL_MODE_EPS, WIRE_VARINT))
         result["shp_grid_energized"] = bool(_first(fields, F_GRID_ENERGIZED, WIRE_VARINT))
         result["shp_charge_limit"] = _first(fields, F_CHARGE_LIMIT, WIRE_VARINT) or 0
+        for key in ("shp_panel_mode", "shp_eps_mode", "shp_grid_energized", "shp_charge_limit"):
+            self.panel_state_seen[key] = now
 
     def _decode_circuits(self, fields: FieldMap, result: dict[str, Any]) -> None:
         """Per-circuit volt / watt / amp from the 32-entry array."""
