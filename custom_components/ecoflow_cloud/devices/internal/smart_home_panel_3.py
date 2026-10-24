@@ -296,9 +296,9 @@ class SmartHomePanel3(DeltaPro3):
             InAmpSensorEntity(client, self, "shp_grid_l1_amp", "Grid L1 Current", False, diagnostic=True),
             InAmpSensorEntity(client, self, "shp_grid_l2_amp", "Grid L2 Current", False, diagnostic=True),
             # Panel settings, read-only. Updated every 120 s (full frame).
-            BackupReserveSensorEntity(client, self, "shp_backup_reserve", "Backup Reserve", diagnostic=True),
-            PanelModeSensorEntity(client, self, "shp_panel_mode", "Operating Mode"),
-            ChargeLimitSensorEntity(client, self, "shp_charge_limit", "Charge Power Limit"),
+            BackupReserveSensorEntity(client, self, "shp_backup_reserve", "Backup Reserve"),
+            PanelModeSensorEntity(client, self, "shp_panel_mode", "Operating Mode", diagnostic=False),
+            ChargeLimitSensorEntity(client, self, "shp_charge_limit", "Charge Power Limit", False),
         ]
         # Per-circuit sensors: power enabled with an integrated-energy
         # companion (kWh) for the Energy dashboard; volt/amp disabled by
@@ -334,7 +334,7 @@ class SmartHomePanel3(DeltaPro3):
             PanelStateBinarySensorEntity(
                 client, self, "shp_grid_energized", "Grid Energized", False, diagnostic=True
             ).with_device_class("power"),
-            PanelStateBinarySensorEntity(client, self, "shp_eps_mode", "EPS Mode", diagnostic=True),
+            PanelStateBinarySensorEntity(client, self, "shp_eps_mode", "EPS Mode", False, diagnostic=True),
         ]
 
     @override
@@ -432,8 +432,8 @@ class SmartHomePanel3(DeltaPro3):
     def _decode_panel_state(self, fields: FieldMap, result: dict[str, Any]) -> None:
         """Grid status, backup reserve, operating mode, charge limit."""
         # 619 and 461 have no reliable marker for their frame, so absent means
-        # "not in this frame" and the last value holds. Grid offline is 2, so
-        # it survives zero-omission; a 0 % reserve would not (it holds).
+        # "not in this frame" and the last value holds. Neither is ever 0 in
+        # practice: grid offline is 2, and the app's lowest reserve is 10 %.
         now = time.monotonic()
         for key, no in (("shp_grid_sta", F_GRID_STA), ("shp_backup_reserve", F_BACKUP_RESERVE)):
             v = _first(fields, no, WIRE_VARINT)
