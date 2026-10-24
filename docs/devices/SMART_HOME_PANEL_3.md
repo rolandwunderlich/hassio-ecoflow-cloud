@@ -12,6 +12,9 @@
 - Grid L2 Voltage (`shp_l2_vol`)   _(disabled)_
 - Grid L1 Current (`shp_grid_l1_amp`)   _(disabled)_
 - Grid L2 Current (`shp_grid_l2_amp`)   _(disabled)_
+- Backup Reserve (`shp_backup_reserve`)
+- Operating Mode (`shp_panel_mode`)
+- Charge Power Limit (`shp_charge_limit`)
 - Circuit 1 Power (`ch_1_pwr`) (energy:  _[Device Name]_ Circuit 1  Energy)
 - Circuit 1 Voltage (`ch_1_vol`)   _(disabled)_
 - Circuit 1 Current (`ch_1_amp`)   _(disabled)_
@@ -108,5 +111,10 @@
 - Circuit 32 Power (`ch_32_pwr`) (energy:  _[Device Name]_ Circuit 32  Energy)
 - Circuit 32 Voltage (`ch_32_vol`)   _(disabled)_
 - Circuit 32 Current (`ch_32_amp`)   _(disabled)_
+
+*Binary sensors*
+- Grid (`shp_grid_sta`)
+- Grid Energized (`shp_grid_energized`)   _(disabled)_
+- EPS Mode (`shp_eps_mode`)
 
 
