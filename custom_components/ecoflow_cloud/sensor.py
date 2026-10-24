@@ -853,10 +853,11 @@ class IntegralEnergySensorEntity(IntegrationSensor):
 
     def __init__(self, base: WattsSensorEntity, enabled_default: bool = True):
         version_kwargs: dict[str, Any] = {"hass": base.coordinator.hass} if _INTEGRATION_SENSOR_TAKES_HASS else {}
+        self._base = base
         super().__init__(
             **version_kwargs,
             integration_method="left",
-            name=f"{base._device.device_info.name} {base.title().replace(f'{const.POWER}', f' {const.ENERGY}')}",
+            name=self._energy_name(),
             round_digits=4,
             source_entity=base.entity_id,
             unique_id=f"{base._attr_unique_id}_energy",
@@ -866,6 +867,16 @@ class IntegralEnergySensorEntity(IntegrationSensor):
         )
         self.device_info = base.device_info
         self._attr_entity_registry_enabled_default = enabled_default and base.enabled_default
+
+    def _energy_name(self) -> str:
+        title = re.sub(rf"\s*{const.POWER}", f" {const.ENERGY}", self._base.title()).strip()
+        return f"{self._base._device.device_info.name} {title}"
+
+    # Derived from the power sensor's title on every state write, so a device-side
+    # rename (e.g. an SHP3 circuit label) reaches the energy sensor without a reload.
+    @property
+    def name(self) -> str:
+        return self._energy_name()
 
 
 class SolarPowerSensorEntity(WattsSensorEntity):
