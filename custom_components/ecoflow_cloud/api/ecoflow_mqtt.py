@@ -7,7 +7,7 @@ from typing import Any
 
 from homeassistant.core import callback
 from paho.mqtt.client import Client, ConnectFlags, DisconnectFlags, MQTTMessage, PayloadType
-from paho.mqtt.enums import CallbackAPIVersion
+from paho.mqtt.enums import CallbackAPIVersion, MQTTErrorCode
 from paho.mqtt.properties import Properties
 from paho.mqtt.reasoncodes import ReasonCode
 
@@ -136,10 +136,12 @@ class EcoflowMQTTClient:
     def __log_with_reason(self, action: str, client, userdata, reason_code: ReasonCode):
         _LOGGER.error(f"MQTT {action}: {reason_code.getName()} ({self.__mqtt_info.client_id}) - {userdata}")
 
-    def publish(self, topic: str, message: PayloadType) -> None:
+    def publish(self, topic: str, message: PayloadType, qos: int = 1) -> None:
         try:
-            info = self.__client.publish(topic, message, 1)
+            info = self.__client.publish(topic, message, qos)
             _LOGGER.debug("Sending " + str(message) + " :" + str(info) + "(" + str(info.is_published()) + ")")
+            if qos == 0 and info.rc == MQTTErrorCode.MQTT_ERR_NO_CONN:
+                _LOGGER.warning("MQTT not connected, dropped message on topic %s", topic)
         except RuntimeError as error:
             _LOGGER.error("Error on topic %s and message %s: %s", topic, message, error)
         except Exception as error:
