@@ -153,9 +153,11 @@ class EcoflowMQTTClient:
         with self.__lock:
             try:
                 info = self.__client.publish(topic, message, qos)
-                _LOGGER.debug("Sending " + str(message) + " :" + str(info) + "(" + str(info.is_published()) + ")")
+                # Before the debug line: is_published() raises for a failed publish.
                 if qos == 0 and info.rc == MQTTErrorCode.MQTT_ERR_NO_CONN:
                     _LOGGER.warning("MQTT not connected, dropped message on topic %s", topic)
+                    return
+                _LOGGER.debug("Sending " + str(message) + " :" + str(info) + "(" + str(info.is_published()) + ")")
             except RuntimeError as error:
                 _LOGGER.error("Error on topic %s and message %s: %s", topic, message, error)
             except Exception:
