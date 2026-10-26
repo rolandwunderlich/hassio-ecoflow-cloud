@@ -13,6 +13,9 @@
 - Grid L1 Current (`shp_grid_l1_amp`)   _(disabled)_
 - Grid L2 Current (`shp_grid_l2_amp`)   _(disabled)_
 - Backup Reserve (`shp_backup_reserve`)
+- Charge Limit (`shp_max_chg_soc`)
+- Nice to Have Threshold (`shp_nice_to_have_soc`)   _(disabled)_
+- Battery Charging State (`shp_chg_dsg_state`)
 - Operating Mode (`shp_panel_mode`)
 - Charge Power Limit (`shp_charge_limit`)   _(disabled)_
 - Circuit 1 Power (`ch_1_pwr`) (energy:  _[Device Name]_ Circuit 1  Energy)
@@ -116,5 +119,6 @@
 - Grid (`shp_grid_sta`)
 - Grid Energized (`shp_grid_energized`)   _(disabled)_
 - EPS Mode (`shp_eps_mode`)   _(disabled)_
+- Storm Guard (`shp_storm_guard`)   _(disabled)_
 
 

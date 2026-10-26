@@ -816,7 +816,7 @@
 
 </p></details>
 
-<details><summary> SMART_HOME_PANEL_3 <i>(sensors: 107)</i> </summary>
+<details><summary> SMART_HOME_PANEL_3 <i>(sensors: 113, binary_sensors: 4)</i> </summary>
 <p>
 
 *Sensors*
@@ -831,6 +831,12 @@
 - Grid L2 Voltage  _(disabled)_
 - Grid L1 Current  _(disabled)_
 - Grid L2 Current  _(disabled)_
+- Backup Reserve
+- Charge Limit
+- Nice to Have Threshold  _(disabled)_
+- Battery Charging State
+- Operating Mode
+- Charge Power Limit  _(disabled)_
 - Circuit 1 Power (energy:  _[Device Name]_ Circuit 1  Energy)
 - Circuit 1 Voltage  _(disabled)_
 - Circuit 1 Current  _(disabled)_
@@ -928,9 +934,15 @@
 - Circuit 32 Voltage  _(disabled)_
 - Circuit 32 Current  _(disabled)_
 
+*Binary sensors*
+- Grid
+- Grid Energized  _(disabled)_
+- EPS Mode  _(disabled)_
+- Storm Guard  _(disabled)_
+
 </p></details>
 
-<details><summary> OCEAN_SMART_PANEL <i>(sensors: 131)</i> </summary>
+<details><summary> OCEAN_SMART_PANEL <i>(sensors: 137, binary_sensors: 4)</i> </summary>
 <p>
 
 *Sensors*
@@ -945,6 +957,12 @@
 - Grid L2 Voltage  _(disabled)_
 - Grid L1 Current  _(disabled)_
 - Grid L2 Current  _(disabled)_
+- Backup Reserve
+- Charge Limit
+- Nice to Have Threshold  _(disabled)_
+- Battery Charging State
+- Operating Mode
+- Charge Power Limit  _(disabled)_
 - Circuit 1 Power (energy:  _[Device Name]_ Circuit 1  Energy)
 - Circuit 1 Voltage  _(disabled)_
 - Circuit 1 Current  _(disabled)_
@@ -1065,6 +1083,12 @@
 - Circuit 40 Power (energy:  _[Device Name]_ Circuit 40  Energy)
 - Circuit 40 Voltage  _(disabled)_
 - Circuit 40 Current  _(disabled)_
+
+*Binary sensors*
+- Grid
+- Grid Energized  _(disabled)_
+- EPS Mode  _(disabled)_
+- Storm Guard  _(disabled)_
 
 </p></details>
 

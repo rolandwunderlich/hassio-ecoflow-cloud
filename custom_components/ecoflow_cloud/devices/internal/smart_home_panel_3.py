@@ -22,6 +22,7 @@ from custom_components.ecoflow_cloud.binary_sensor import MiscBinarySensorEntity
 from custom_components.ecoflow_cloud.devices import const
 from custom_components.ecoflow_cloud.devices.internal.delta_pro_3 import DeltaPro3
 from custom_components.ecoflow_cloud.devices.internal.proto import ef_dp3_iobroker_pb2 as dp3
+from custom_components.ecoflow_cloud.devices.public.delta3_max_plus import Delta3ChargingStateSensorEntity
 from custom_components.ecoflow_cloud.entities import EcoFlowAbstractDataEntity
 from custom_components.ecoflow_cloud.sensor import (
     AmpSensorEntity,
@@ -53,11 +54,16 @@ F_L1_VOL, F_L2_VOL = 956, 957
 F_GRID_L1_AMP, F_GRID_L2_AMP = 958, 959
 # Panel state, sent only in the 120 s full frames. Names and meanings follow
 # the SHP3 schema in rabits/ha-ef-ble (dev_apl_comm), which agrees with
-# 1RadMan/ecoflow-cloud-dpu-extra. 619 and 461 travel in one frame, 752, 1244
-# and 1245 in another.
+# 1RadMan/ecoflow-cloud-dpu-extra. 619, 461, 270, 467 and 282 travel in one
+# frame, 752, 806, 1244 and 1245 in another; 282 also comes in the 2 s frames
+# when it changes.
 F_GRID_STA = 619  # grid_connection_sta: 1 grid in, 2 offline, 3 feeding
 F_GRID_ENERGIZED = 752
 F_BACKUP_RESERVE = 461  # %
+F_MAX_CHG_SOC = 270  # cms_max_chg_soc, %: the app's charge limit
+F_NICE_TO_HAVE_SOC = 806  # mid_priority_discharge_low, %: Nice to Have circuits shed below it
+F_STORM_GUARD = 467  # storm_pattern_enable
+F_CHG_DSG_STATE = 282  # cms_chg_dsg_state: 0 idle, 1 discharging, 2 charging
 F_CHARGE_LIMIT = 1244  # W
 F_PANEL_MODE = 1245  # submessage of mode flags, see PANEL_MODES
 # Operating-mode flag sub-fields of 1245; none set means Backup. Sub-field 4
@@ -324,7 +330,11 @@ class PanelStateBinarySensorEntity(_PanelState, MiscBinarySensorEntity):
     pass
 
 
-class BackupReserveSensorEntity(_PanelState, BatteryLimitSensorEntity):
+class PanelLimitSensorEntity(_PanelState, BatteryLimitSensorEntity):
+    pass
+
+
+class PanelChargingStateSensorEntity(_PanelState, Delta3ChargingStateSensorEntity):  # type: ignore[misc]
     pass
 
 
@@ -450,7 +460,12 @@ class SmartHomePanel3(DeltaPro3):
             InAmpSensorEntity(client, self, "shp_grid_l1_amp", "Grid L1 Current", False, diagnostic=True),
             InAmpSensorEntity(client, self, "shp_grid_l2_amp", "Grid L2 Current", False, diagnostic=True),
             # Panel settings, read-only. Updated every 120 s (full frame).
-            BackupReserveSensorEntity(client, self, "shp_backup_reserve", "Backup Reserve"),
+            PanelLimitSensorEntity(client, self, "shp_backup_reserve", "Backup Reserve"),
+            PanelLimitSensorEntity(client, self, "shp_max_chg_soc", "Charge Limit"),
+            PanelLimitSensorEntity(
+                client, self, "shp_nice_to_have_soc", "Nice to Have Threshold", False, diagnostic=True
+            ),
+            PanelChargingStateSensorEntity(client, self, "shp_chg_dsg_state", const.BATTERY_CHARGING_STATE),
             PanelModeSensorEntity(client, self, "shp_panel_mode", "Operating Mode", diagnostic=False),
             ChargeLimitSensorEntity(client, self, "shp_charge_limit", "Charge Power Limit", False),
         ]
@@ -489,6 +504,7 @@ class SmartHomePanel3(DeltaPro3):
                 client, self, "shp_grid_energized", "Grid Energized", False, diagnostic=True
             ).with_device_class("power"),
             PanelStateBinarySensorEntity(client, self, "shp_eps_mode", "EPS Mode", False, diagnostic=True),
+            PanelStateBinarySensorEntity(client, self, "shp_storm_guard", "Storm Guard", False, diagnostic=True),
         ]
 
     @override
@@ -685,12 +701,19 @@ class SmartHomePanel3(DeltaPro3):
             result["shp_batt_pwr"] = round(self._flows["shp_load_pwr"] - self._flows["shp_grid_pwr"], 2)
 
     def _decode_panel_state(self, fields: FieldMap, result: dict[str, Any]) -> None:
-        """Grid status, backup reserve, operating mode, charge limit."""
-        # 619 and 461 have no reliable marker for their frame, so absent means
-        # "not in this frame" and the last value holds. Neither is ever 0 in
-        # practice: grid offline is 2, and the app's lowest reserve is 10 %.
+        """Grid status, panel settings, charge state, operating mode."""
+        # These have no reliable marker for their frame, so absent means "not
+        # in this frame" and the last value holds. The full frame sends them
+        # even when 0 (467 and 282 arrive as explicit zeros).
         now = time.monotonic()
-        for key, no in (("shp_grid_sta", F_GRID_STA), ("shp_backup_reserve", F_BACKUP_RESERVE)):
+        for key, no in (
+            ("shp_grid_sta", F_GRID_STA),
+            ("shp_backup_reserve", F_BACKUP_RESERVE),
+            ("shp_max_chg_soc", F_MAX_CHG_SOC),
+            ("shp_nice_to_have_soc", F_NICE_TO_HAVE_SOC),
+            ("shp_storm_guard", F_STORM_GUARD),
+            ("shp_chg_dsg_state", F_CHG_DSG_STATE),
+        ):
             v = _first(fields, no, WIRE_VARINT)
             if v is not None:
                 result[key] = v
