@@ -719,9 +719,12 @@ class SmartHomePanel3(DeltaPro3):
                 result[key] = v
                 self.panel_state_seen[key] = now
 
-        # The mode submessage marks the 752/1244 frame, and within it an absent
-        # value means 0: grid de-energized, no charge limit (zero-omission, see
-        # module note). If the frame came without it, everything here holds.
+        # The mode submessage carries the operating mode. In the full frame an
+        # absent 752/1244 means 0: grid de-energized, no charge limit
+        # (zero-omission, see module note). A mode change arrives as a frame
+        # with 1245 alone, where absent 752/1244 hold. The full frame is
+        # recognised by any of its other fields being present, so it is only
+        # missed when all three are 0 at once.
         mode = _first(fields, F_PANEL_MODE, WIRE_LEN)
         if mode is None:
             return
@@ -730,9 +733,17 @@ class SmartHomePanel3(DeltaPro3):
             (name for no, name in PANEL_MODES.items() if _first(flags, no, WIRE_VARINT)), "backup"
         )
         result["shp_eps_mode"] = bool(_first(flags, PANEL_MODE_EPS, WIRE_VARINT))
-        result["shp_grid_energized"] = bool(_first(fields, F_GRID_ENERGIZED, WIRE_VARINT))
-        result["shp_charge_limit"] = _first(fields, F_CHARGE_LIMIT, WIRE_VARINT) or 0
-        for key in ("shp_panel_mode", "shp_eps_mode", "shp_grid_energized", "shp_charge_limit"):
+        seen = ["shp_panel_mode", "shp_eps_mode"]
+        full_frame = any(no in fields for no in (F_GRID_ENERGIZED, F_NICE_TO_HAVE_SOC, F_CHARGE_LIMIT))
+        energized = _first(fields, F_GRID_ENERGIZED, WIRE_VARINT)
+        if energized is not None or full_frame:
+            result["shp_grid_energized"] = bool(energized)
+            seen.append("shp_grid_energized")
+        limit = _first(fields, F_CHARGE_LIMIT, WIRE_VARINT)
+        if limit is not None or full_frame:
+            result["shp_charge_limit"] = limit or 0
+            seen.append("shp_charge_limit")
+        for key in seen:
             self.panel_state_seen[key] = now
 
     def _decode_circuits(self, fields: FieldMap, result: dict[str, Any]) -> None:
