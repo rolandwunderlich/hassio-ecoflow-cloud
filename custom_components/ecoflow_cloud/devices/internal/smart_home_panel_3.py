@@ -211,9 +211,9 @@ _config_read_seq = itertools.count(1)
 def _config_read(device_sn: str) -> bytes:
     """A ConfigRead (254/19) to the panel, framed as the EcoFlow app frames it:
     src 32, dest 11, version 4, the action list packed, and the serial repeated
-    in header fields 26 and 27, which the DP3 proto doesn't declare, `from`
-    "ios" and a small seq. The panel ignores an unpacked action list, and
-    ignored `from` "HomeAssistant" with a `Message.gen_seq()` seq."""
+    in header fields 26 and 27, which the DP3 proto doesn't declare, and a
+    small seq. The panel ignores an unpacked action list or a
+    `Message.gen_seq()` seq (~1e9)."""
     pdata = b"\x0a\x02\x81\x01"  # action_id = [129], packed
     header = dp3.DP3Header(
         pdata=pdata,
@@ -231,7 +231,7 @@ def _config_read(device_sn: str) -> bytes:
         payload_ver=1,
         device_sn=device_sn,
     )
-    setattr(header, "from", "ios")  # "from" is a Python keyword
+    setattr(header, "from", "HomeAssistant")  # "from" is a Python keyword
     sn = device_sn.encode()
     return _len_field(1, header.SerializeToString() + _len_field(26, sn) + _len_field(27, sn))  # DP3SendHeaderMsg.msg
 
