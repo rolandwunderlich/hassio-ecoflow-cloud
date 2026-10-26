@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import logging
 import struct
 import time
@@ -17,7 +18,6 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from custom_components.ecoflow_cloud.api import EcoflowApiClient
-from custom_components.ecoflow_cloud.api.message import Message
 from custom_components.ecoflow_cloud.binary_sensor import MiscBinarySensorEntity
 from custom_components.ecoflow_cloud.devices import const
 from custom_components.ecoflow_cloud.devices.internal.delta_pro_3 import DeltaPro3
@@ -199,11 +199,15 @@ def _decode_task(item: bytes) -> dict[str, Any] | None:
     return task
 
 
+_config_read_seq = itertools.count(1)
+
+
 def _config_read(device_sn: str) -> bytes:
     """A ConfigRead (254/19) to the panel, framed as the EcoFlow app frames it:
     src 32, dest 11, version 4, the action list packed, and the serial repeated
-    in header fields 26 and 27, which the DP3 proto doesn't declare. The panel
-    ignores an unpacked action list."""
+    in header fields 26 and 27, which the DP3 proto doesn't declare, `from`
+    "ios" and a small seq. The panel ignores an unpacked action list, and
+    ignored `from` "HomeAssistant" with a `Message.gen_seq()` seq."""
     pdata = b"\x0a\x02\x81\x01"  # action_id = [129], packed
     header = dp3.DP3Header(
         pdata=pdata,
@@ -216,12 +220,12 @@ def _config_read(device_sn: str) -> bytes:
         cmd_id=19,
         data_len=len(pdata),
         need_ack=1,
-        seq=Message.gen_seq(),
+        seq=next(_config_read_seq),
         version=4,
         payload_ver=1,
         device_sn=device_sn,
     )
-    setattr(header, "from", "HomeAssistant")  # "from" is a Python keyword
+    setattr(header, "from", "ios")  # "from" is a Python keyword
     sn = device_sn.encode()
     return _len_field(1, header.SerializeToString() + _len_field(26, sn) + _len_field(27, sn))  # DP3SendHeaderMsg.msg
 
