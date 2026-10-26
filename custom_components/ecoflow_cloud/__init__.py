@@ -26,6 +26,7 @@ CONFIG_VERSION = 13
 _PLATFORMS = {
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.CALENDAR,
     Platform.NUMBER,
     Platform.SELECT,
     Platform.SENSOR,

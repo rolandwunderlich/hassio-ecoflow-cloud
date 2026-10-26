@@ -1,0 +1,5 @@
+get_schedule:
+  target:
+    entity:
+      integration: ecoflow_cloud
+      domain: calendar

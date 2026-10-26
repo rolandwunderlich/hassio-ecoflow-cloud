@@ -2,9 +2,11 @@ import asyncio
 import logging
 import struct
 import time
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Self, override
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
+from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.components.number import NumberEntity
 from homeassistant.components.select import SelectEntity
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
@@ -12,11 +14,15 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from custom_components.ecoflow_cloud.api import EcoflowApiClient
+from custom_components.ecoflow_cloud.api.message import Message, PrivateAPIMessageProtocol
 from custom_components.ecoflow_cloud.binary_sensor import MiscBinarySensorEntity
 from custom_components.ecoflow_cloud.devices import const
 from custom_components.ecoflow_cloud.devices.internal.delta_pro_3 import DeltaPro3
+from custom_components.ecoflow_cloud.devices.internal.proto import ef_dp3_iobroker_pb2 as dp3
+from custom_components.ecoflow_cloud.entities import EcoFlowAbstractDataEntity
 from custom_components.ecoflow_cloud.sensor import (
     AmpSensorEntity,
     BatteryLimitSensorEntity,
@@ -61,6 +67,23 @@ PANEL_MODE_EPS = 4
 GRID_STA_ON = {1: True, 2: False, 3: True}
 # 2.5 full-frame periods: one lost frame is tolerated, a dead stream is not.
 PANEL_STATE_STALE_S = 300
+
+# Scheduled tasks. Full frames carry only a change counter; the task list
+# itself (TimeTaskItemV2List) arrives in the ConfigReadAck (254/20) to a
+# ConfigRead (254/19) for action 129, which the app sends when its schedule
+# screen opens and after each edit. The integration sends the same request.
+F_TASK_CHANGE_CNT = 286  # time_task_change_cnt
+F_TASK_LIST = 129  # read_time_task_v2_list
+PANEL_ADDR = 11
+# TimeTaskItemV2 sub-fields.
+T_INDEX, T_IS_CFG, T_IS_ENABLE, T_MODE, T_DAYS, T_TIME, T_TYPE, T_DETAIL = 1, 2, 3, 5, 6, 7, 8, 10
+TASK_MODES = {1: "weekly", 2: "once"}
+TASK_TYPES = {0: "charge", 1: "discharge"}
+TASK_DETAIL_SOC = 4
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")  # day mask bit 0 = Monday
+# Edits made in the app are followed by the app's own read, so ours matter at
+# startup and for edits from elsewhere; this caps retries if the panel ignores us.
+TASK_READ_MIN_INTERVAL_S = 300
 
 # Protobuf wire types (as tagged by _parse_fields).
 WIRE_VARINT = 0
@@ -120,6 +143,101 @@ def _first(fields: FieldMap, no: int, wire_type: int) -> Any | None:
     """First value of a field, or None if absent or of another wire type."""
     vals = fields.get(no)
     return vals[0][1] if vals and vals[0][0] == wire_type else None
+
+
+def _hhmm(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _at(day: date, hhmm: str, tz: Any) -> datetime:
+    """Local datetime for "HH:MM" on a day; "24:00" is the next midnight."""
+    h, m = map(int, hhmm.split(":"))
+    return datetime(day.year, day.month, day.day, tzinfo=tz) + timedelta(hours=h, minutes=m)
+
+
+def _varint(v: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = v & 0x7F
+        v >>= 7
+        if not v:
+            out.append(b)
+            return bytes(out)
+        out.append(b | 0x80)
+
+
+def _len_field(no: int, data: bytes) -> bytes:
+    return _varint(no << 3 | WIRE_LEN) + _varint(len(data)) + data
+
+
+def _decode_task(item: bytes) -> dict[str, Any] | None:
+    """One TimeTaskItemV2 as plain data, or None for an unconfigured slot."""
+    t = _parse_fields(item)
+    if not _first(t, T_IS_CFG, WIRE_VARINT):
+        return None
+    mode = _first(t, T_MODE, WIRE_VARINT) or 0
+    param = _first(t, T_DAYS, WIRE_VARINT) or 0
+    # time_table packs the window as end << 16 | start, in minutes.
+    table = _first(t, T_TIME, WIRE_VARINT) or 0
+    # Zero values are omitted on the wire (proto3): index 0, type 0 = charge.
+    kind = _first(t, T_TYPE, WIRE_VARINT) or 0
+    soc = None
+    for wire_type, detail in t.get(T_DETAIL, []):
+        d = _parse_fields(detail) if wire_type == WIRE_LEN else {}
+        if _first(d, 1, WIRE_VARINT) == TASK_DETAIL_SOC:
+            soc = _first(d, 2, WIRE_F32)
+    task: dict[str, Any] = {
+        "index": _first(t, T_INDEX, WIRE_VARINT) or 0,
+        "enabled": bool(_first(t, T_IS_ENABLE, WIRE_VARINT)),
+        "mode": TASK_MODES.get(mode, f"mode_{mode}"),
+        "start": _hhmm(table & 0xFFFF),
+        "end": _hhmm(table >> 16),
+        "type": TASK_TYPES.get(kind, f"type_{kind}"),
+        "target_soc": round(soc) if soc is not None else None,
+    }
+    if mode == 1:
+        task["days"] = [day for bit, day in enumerate(DAYS) if param >> bit & 1]
+    else:
+        task["time_param"] = param
+    return task
+
+
+class _ConfigRead(PrivateAPIMessageProtocol):
+    """A ConfigRead (254/19) to the panel, framed as the EcoFlow app frames
+    commands to SHP3-dialect devices (src 32, dest 11, version 4, the serial
+    repeated in header fields 26 and 27, which the DP3 proto doesn't declare)."""
+
+    def __init__(self, device_sn: str, action_id: int) -> None:
+        pdata = _varint(1 << 3 | WIRE_VARINT) + _varint(action_id)
+        header = dp3.DP3Header()
+        header.pdata = pdata
+        header.src = 32
+        header.dest = PANEL_ADDR
+        header.d_src = 1
+        header.d_dest = 1
+        header.check_type = 3
+        header.cmd_func = 254
+        header.cmd_id = 19
+        header.data_len = len(pdata)
+        header.need_ack = 1
+        header.seq = Message.gen_seq()
+        header.version = 4
+        header.payload_ver = 1
+        setattr(header, "from", "HomeAssistant")  # "from" is a Python keyword
+        header.device_sn = device_sn
+        sn = device_sn.encode()
+        body = header.SerializeToString() + _len_field(26, sn) + _len_field(27, sn)
+        self._payload = _len_field(1, body)  # DP3SendHeaderMsg.msg
+        self._seq = header.seq
+        self._action_id = action_id
+
+    @override
+    def to_mqtt_payload(self) -> bytes:
+        return self._payload
+
+    @override
+    def to_dict(self) -> dict:
+        return {"ConfigRead": {"cmdFunc": 254, "cmdId": 19, "seq": self._seq, "action_id": [self._action_id]}}
 
 
 if TYPE_CHECKING:
@@ -239,6 +357,55 @@ class PanelModeSensorEntity(_PanelState, MiscSensorEntity):  # type: ignore[misc
     _attr_options = ["backup", *PANEL_MODES.values()]
 
 
+class TaskChangeCountSensorEntity(_PanelState, MiscSensorEntity):  # type: ignore[misc]
+    pass
+
+
+class ScheduleCalendarEntity(EcoFlowAbstractDataEntity, CalendarEntity):
+    """The panel's weekly scheduled tasks as a read-only calendar.
+
+    Unavailable until a task list has been read, and while the change counter
+    is ahead of the last read (an edit not read back yet). The full list,
+    including disabled and one-off tasks, comes from `ecoflow_cloud.get_schedule`.
+    """
+
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, client: EcoflowApiClient, device: "SmartHomePanel3") -> None:
+        super().__init__(client, device, "Schedule", "shp_schedule")
+        self._panel = device
+        self._written: tuple[Any, ...] | None = None
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._panel.task_list_current
+
+    @property
+    def event(self) -> CalendarEvent | None:
+        now = dt_util.now()
+        return next((e for e in self._panel.schedule_events(now, now + timedelta(days=8)) if e.end > now), None)
+
+    async def async_get_events(
+        self, hass: HomeAssistant, start_date: datetime, end_date: datetime
+    ) -> list[CalendarEvent]:
+        return self._panel.schedule_events(start_date, end_date)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        await self.hass.async_add_executor_job(self._panel.request_task_list)
+
+    def _handle_coordinator_update(self) -> None:
+        # Frames arrive every few seconds; write only when the schedule or its
+        # freshness changed (the calendar itself schedules event boundaries).
+        written = (self.available, self._panel.schedule_signature())
+        if written != self._written:
+            self._written = written
+            self.async_write_ha_state()
+
+    async def async_get_schedule(self) -> dict[str, Any]:
+        return self._panel.schedule_response()
+
+
 class SmartHomePanel3(DeltaPro3):
     """EcoFlow Smart Home Panel 3 (private / app API).
 
@@ -271,6 +438,14 @@ class SmartHomePanel3(DeltaPro3):
         self._flows: dict[str, float] = {}
         # Panel-state key -> monotonic time it was last decoded (see _PanelState).
         self.panel_state_seen: dict[str, float] = {}
+        # Last task list read and the change counter it belongs to (None until
+        # a counter has been seen with it); the latest counter; when the last
+        # read was requested.
+        self._tasks: list[dict[str, Any]] | None = None
+        self._task_list_cnt: int | None = None
+        self._task_cnt: int | None = None
+        self._task_read_at: float | None = None
+        self._client: EcoflowApiClient | None = None
 
     @override
     def sensors(self, client: EcoflowApiClient) -> list[SensorEntity]:
@@ -299,6 +474,9 @@ class SmartHomePanel3(DeltaPro3):
             BackupReserveSensorEntity(client, self, "shp_backup_reserve", "Backup Reserve"),
             PanelModeSensorEntity(client, self, "shp_panel_mode", "Operating Mode", diagnostic=False),
             ChargeLimitSensorEntity(client, self, "shp_charge_limit", "Charge Power Limit", False),
+            TaskChangeCountSensorEntity(
+                client, self, "shp_task_change_cnt", "Schedule Change Count", False, diagnostic=True
+            ),
         ]
         # Per-circuit sensors: power enabled with an integrated-energy
         # companion (kWh) for the Energy dashboard; volt/amp disabled by
@@ -353,6 +531,7 @@ class SmartHomePanel3(DeltaPro3):
         super().configure(hass)
         self._hass = hass
         self._store: Store[dict] = Store(hass, 1, f"ecoflow_cloud.{self.device_info.sn}.circuit_names")
+        self._task_store: Store[dict] = Store(hass, 1, f"ecoflow_cloud.{self.device_info.sn}.time_tasks")
 
     async def async_restore_state(self) -> None:
         # Load persisted circuit labels before entities are built, so names
@@ -362,6 +541,73 @@ class SmartHomePanel3(DeltaPro3):
         if data:
             self._meta = {int(n): m for n, m in data.items()}
             self._publish_meta(self.data.params)
+        # The task list is read only on request, so keep the last one across
+        # restarts; the change counter says whether it still holds.
+        tasks = await self._task_store.async_load()
+        if tasks:
+            self._tasks = tasks["tasks"]
+            self._task_list_cnt = tasks["change_cnt"]
+
+    @override
+    def calendars(self, client: EcoflowApiClient) -> list[CalendarEntity]:
+        self._client = client
+        return [ScheduleCalendarEntity(client, self)]
+
+    @property
+    def task_list_current(self) -> bool:
+        """A task list has been read and the schedule hasn't changed since."""
+        if self._tasks is None:
+            return False
+        return self._task_cnt is None or self._task_list_cnt is None or self._task_cnt == self._task_list_cnt
+
+    def schedule_signature(self) -> tuple[Any, ...]:
+        return (self._task_list_cnt, repr(self._tasks))
+
+    def schedule_response(self) -> dict[str, Any]:
+        return {"tasks": self._tasks or [], "current": self.task_list_current, "change_count": self._task_cnt}
+
+    def schedule_events(self, start: datetime, end: datetime) -> list[CalendarEvent]:
+        """Enabled weekly tasks expanded into events overlapping [start, end)."""
+        tz = dt_util.get_default_time_zone()
+        events: list[CalendarEvent] = []
+        day = start.astimezone(tz).date() - timedelta(days=1)
+        while day <= end.astimezone(tz).date():
+            for task in self._tasks or []:
+                if not task["enabled"] or DAYS[day.weekday()] not in task.get("days", ()):
+                    continue
+                t_start = _at(day, task["start"], tz)
+                t_end = _at(day, task["end"], tz)
+                if t_end <= t_start:
+                    t_end += timedelta(days=1)
+                if t_start < end and t_end > start:
+                    summary = task["type"].capitalize()
+                    if task["target_soc"] is not None:
+                        summary += f" to {task['target_soc']} %"
+                    events.append(
+                        CalendarEvent(
+                            start=t_start,
+                            end=t_end,
+                            summary=summary,
+                            description=f"Task {task['index']}",
+                            uid=f"{task['index']}-{day.isoformat()}",
+                        )
+                    )
+            day += timedelta(days=1)
+        return sorted(events, key=lambda e: e.start_datetime_local)
+
+    def request_task_list(self) -> None:
+        """Ask the panel for its task list (the ConfigRead the app sends)."""
+        if self._client is None:
+            return
+        now = time.monotonic()
+        if self._task_read_at is not None and now - self._task_read_at < TASK_READ_MIN_INTERVAL_S:
+            return
+        self._task_read_at = now
+        # Published directly rather than via send_set_message, which would
+        # mark the device as freshly updated.
+        self._client.mqtt_client.publish(
+            self.device_info.set_topic, _ConfigRead(self.device_info.sn, F_TASK_LIST).to_mqtt_payload(), qos=0
+        )
 
     def _publish_meta(self, result: dict[str, Any]) -> None:
         for n, m in self._meta.items():
@@ -381,18 +627,59 @@ class SmartHomePanel3(DeltaPro3):
     @override
     def _decode_message_by_type(self, pdata: bytes, header_info: dict[str, Any]) -> dict[str, Any]:
         result = super()._decode_message_by_type(pdata, header_info)
-        # Only DisplayPropertyUpload (254/21) carries the SHP-specific fields.
-        if header_info.get("cmdFunc") == 254 and header_info.get("cmdId") == 21:
-            try:
+        cmd = (header_info.get("cmdFunc"), header_info.get("cmdId"))
+        try:
+            # DisplayPropertyUpload carries the SHP-specific telemetry.
+            if cmd == (254, 21):
                 fields = _parse_fields(pdata)
                 self._decode_flows(fields, result)
                 self._decode_panel_state(fields, result)
+                self._decode_task_counter(fields, result)
                 self._decode_circuits(fields, result)
                 self._decode_metadata(fields, result)
                 self._combine_split_phase(result)
-            except Exception as e:  # reverse-engineered payload; never break the DP3 decode
-                _LOGGER.debug("SHP3 field parse skipped: %s", e)
+            # ConfigReadAck from the panel (requests, ours and the app's, share the topics).
+            elif cmd == (254, 20) and header_info.get("src") == PANEL_ADDR:
+                self._decode_task_list(_parse_fields(pdata))
+        except Exception as e:  # reverse-engineered payload; never break the DP3 decode
+            _LOGGER.debug("SHP3 field parse skipped: %s", e)
         return result
+
+    def _decode_task_counter(self, fields: FieldMap, result: dict[str, Any]) -> None:
+        """Schedule change counter; a change means the task list needs a re-read."""
+        cnt = _first(fields, F_TASK_CHANGE_CNT, WIRE_VARINT)
+        if cnt is None:
+            return
+        result["shp_task_change_cnt"] = cnt
+        self.panel_state_seen["shp_task_change_cnt"] = time.monotonic()
+        self._task_cnt = cnt
+        # A list read before any counter was seen belongs to the first one.
+        if self._tasks is not None and self._task_list_cnt is None:
+            self._task_list_cnt = cnt
+            self._save_tasks()
+        elif cnt != self._task_list_cnt:
+            self.request_task_list()
+
+    def _decode_task_list(self, fields: FieldMap) -> None:
+        """The task list from a TimeTaskItemV2List (unconfigured slots dropped)."""
+        lst = _first(fields, F_TASK_LIST, WIRE_LEN)
+        if lst is None:
+            return
+        tasks = [
+            t
+            for wire_type, item in _parse_fields(lst).get(1, [])
+            if wire_type == WIRE_LEN and (t := _decode_task(item))
+        ]
+        # The app reads the list several times per visit; store only changes.
+        if (tasks, self._task_cnt) != (self._tasks, self._task_list_cnt):
+            self._tasks, self._task_list_cnt = tasks, self._task_cnt
+            self._save_tasks()
+
+    def _save_tasks(self) -> None:
+        asyncio.run_coroutine_threadsafe(
+            self._task_store.async_save({"tasks": self._tasks, "change_cnt": self._task_list_cnt}),
+            self._hass.loop,
+        )
 
     def _decode_flows(self, fields: FieldMap, result: dict[str, Any]) -> None:
         """Aggregate flows: home load, grid import, computed battery power."""

@@ -7,6 +7,7 @@ from typing import Any, cast, override
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.components.button import ButtonEntity
+from homeassistant.components.calendar import CalendarEntity
 from homeassistant.components.number import NumberEntity
 from homeassistant.components.select import SelectEntity
 from homeassistant.components.sensor import SensorEntity
@@ -118,6 +119,9 @@ class BaseDevice(ABC):
         return []
 
     def buttons(self, client: EcoflowApiClient) -> Sequence[ButtonEntity]:
+        return []
+
+    def calendars(self, client: EcoflowApiClient) -> Sequence[CalendarEntity]:
         return []
 
     def update_data(self, raw_data: bytes, data_type: str) -> bool:

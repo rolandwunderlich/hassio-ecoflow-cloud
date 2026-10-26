@@ -99,5 +99,11 @@
                 }
             }
         }
+    },
+    "services": {
+        "get_schedule": {
+            "name": "Get schedule",
+            "description": "Returns the panel's scheduled tasks as last read from the device (index, enabled, mode, days, start, end, type, target SoC), whether that list is current, and the panel's change counter."
+        }
     }
 }
